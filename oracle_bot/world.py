@@ -1,8 +1,9 @@
 """Overworld room graph from surveyed collision maps, for travelling between screens.
 
-data/world.json: {group: {room: {"edges": {dir: [[component, lo, hi], ...]}, "comp": [[y, x, component], ...]}}}
+data/world.json: {group: {room: [tier, ...]}} with one entry per ability tier (TIERS), each
+{"edges": {dir: [[component, lo, hi], ...]}, "comp": [[y, x, component], ...]}.
 Edge spans are ranges of Link's x (up/down edges) or y (left/right edges) from which he can walk off that
-edge; components are connected areas within the room (built by tools/survey.py with sword-breakables passable).
+edge; components are connected areas within the room given that tier's abilities (built by tools/survey.py).
 Ledges and warps aren't edges here: routes handle those explicitly.
 """
 
@@ -20,7 +21,8 @@ from .emu import Emu
 PATH = Path(__file__).parent / "data" / "world.json"
 OPPOSITE = {"up": "down", "down": "up", "left": "right", "right": "left"}
 DELTA = {"up": -16, "down": 16, "left": -1, "right": 1}
-ALLOW = frozenset({"sword"})
+# Ability sets the graph is computed for, in the order Link gets them. Routing uses the largest tier Link has.
+TIERS = [frozenset({"sword"}), frozenset({"sword", "shovel"}), frozenset({"sword", "shovel", "ember"})]
 
 
 def components(cl: nav.Clearance) -> dict[tuple[int, int], int]:
@@ -46,8 +48,12 @@ def components(cl: nav.Clearance) -> dict[tuple[int, int], int]:
     return comp
 
 
-def describe_room(g: nav.Grid) -> dict:
-    cl = nav.clearance(g, ALLOW)
+def describe_room(g: nav.Grid) -> list[dict]:
+    return [describe_tier(g, tier) for tier in TIERS]
+
+
+def describe_tier(g: nav.Grid, allow: frozenset[str]) -> dict:
+    cl = nav.clearance(g, allow)
     H, W = cl.ok.shape
     comp = components(cl)
     edges = {}
@@ -58,9 +64,11 @@ def describe_room(g: nav.Grid) -> dict:
             if test(y, x):
                 spans.setdefault(c, []).append(x if d in ("up", "down") else y)
         edges[d] = [[c, min(v), max(v)] for c, v in sorted(spans.items())]
-    # Keep one sample node per 8x8 cell: enough to tell which component Link is standing in.
-    sample = [[y, x, c] for (y, x), c in comp.items() if y % 8 == 4 and x % 8 == 4]
-    return {"edges": edges, "comp": sample}
+    jumps = sorted({(comp[a], comp[b]) for a, bs in nav.ledges(g, cl).items() for b in bs
+                    if a in comp and b in comp and comp[a] != comp[b]})
+    # Keep one sample node per tile: enough to tell which component Link is standing in.
+    sample = [[y, x, c] for (y, x), c in comp.items() if y % 16 == 8 and x % 16 == 8]
+    return {"edges": edges, "comp": sample, "ledges": [list(j) for j in jumps]}
 
 
 _WORLD: dict | None = None
@@ -73,17 +81,24 @@ def world() -> dict:
     return _WORLD
 
 
-def component_at(group: int, room: int, y: int, x: int) -> int | None:
-    info = world().get(str(group), {}).get(str(room))
+def tier_for(allow: frozenset[str]) -> int:
+    return max(i for i, t in enumerate(TIERS) if t <= allow | {"sword"})
+
+
+def rooms_for(group: int, tier: int) -> dict[str, dict]:
+    return {r: tiers[tier] for r, tiers in world().get(str(group), {}).items()}
+
+
+def component_at(rooms: dict[str, dict], room: int, y: int, x: int) -> int | None:
+    info = rooms.get(str(room))
     if not info:
         return None
     best = min(info["comp"], key=lambda n: abs(n[0] - y) + abs(n[1] - x), default=None)
     return best[2] if best else None
 
 
-def route(group: int, room: int, comp: int | None, target: int) -> list[tuple[str, int, int]] | None:
+def route(rooms: dict[str, dict], room: int, comp: int | None, target: int) -> list[tuple[str, int, int]] | None:
     """Shortest list of (direction, lo, hi) hops from (room, comp) to `target` room."""
-    rooms = world().get(str(group), {})
     starts = [(room, comp)] if comp is not None else [(room, c) for c in {s[0] for d in rooms[str(room)]["edges"].values() for s in d}]
     prev: dict[tuple[int, int], tuple[tuple[int, int], tuple[str, int, int]] | None] = {s: None for s in starts}
     queue = deque(starts)
@@ -96,7 +111,12 @@ def route(group: int, room: int, comp: int | None, target: int) -> list[tuple[st
                 node, hop = prev[node]
                 hops.append(hop)
             return hops[::-1]
-        for d, spans in rooms.get(str(r), {"edges": {}})["edges"].items():
+        info = rooms.get(str(r), {"edges": {}})
+        for a, b in info.get("ledges", ()):
+            if a == c and (r, b) not in prev:
+                prev[(r, b)] = ((r, c), ("ledge", b, b))
+                queue.append((r, b))
+        for d, spans in info["edges"].items():
             nr = r + DELTA[d]
             if not 0 <= nr < 256 or (d in ("left", "right") and nr >> 4 != r >> 4) or str(nr) not in rooms:
                 continue
@@ -111,10 +131,11 @@ def route(group: int, room: int, comp: int | None, target: int) -> list[tuple[st
     return None
 
 
-def plan_to(e: Emu, target: int) -> list[tuple[str, int, int]]:
+def plan_to(e: Emu, target: int, allow: frozenset[str]) -> list[tuple[str, int, int]]:
     group, room = ram.room(e)
     y, x = ram.link_px(e)
-    hops = route(group, room, component_at(group, room, y, x), target)
+    rooms = rooms_for(group, tier_for(allow))
+    hops = route(rooms, room, component_at(rooms, room, y, x), target)
     if hops is None:
         raise KeyError(f"no surveyed route from {group}:{room:02x} to {group}:{target:02x}")
     return hops

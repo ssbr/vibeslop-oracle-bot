@@ -1,6 +1,6 @@
 """The route: segments in play order."""
 
-from . import s00_intro, s01_shovel, s02_maku_road
+from . import s00_intro, s01_shovel, s02_maku_road, s03_graveyard
 
-SEGMENTS = [s00_intro.R, s01_shovel.R, s02_maku_road.R]
+SEGMENTS = [s00_intro.R, s01_shovel.R, s02_maku_road.R, s03_graveyard.R]
 ITEMS = [item for seg in SEGMENTS for item in seg.items]

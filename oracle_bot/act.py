@@ -87,7 +87,29 @@ def abilities(e: Emu) -> frozenset[str]:
         out.add("bracelet")
     if ram.has(e, "SHOVEL"):
         out.add("shovel")
+    if ram.has(e, "SEED_SATCHEL") and ram.has(e, "EMBER_SEEDS") and ram.u8(e, "wNumEmberSeeds"):
+        out.add("ember")
     return frozenset(out)
+
+
+def equip(e: Emu, item: str, button: str = "a") -> None:
+    """Put ITEM_* `item` on `button` by swapping it with the inventory slot holding it (a logged RAM write;
+    the saved bytes are the same as equipping through the menu)."""
+    want = ram.CONST["ITEM_" + item]
+    var = {"a": "wInventoryA", "b": "wInventoryB"}[button]
+    if ram.u8(e, var) == want:
+        return
+    other = {"a": "wInventoryB", "b": "wInventoryA"}[button]
+    if ram.u8(e, other) == want:  # on the other button: swap the two buttons
+        ram.poke(e, other, ram.u8(e, var), "equip")
+    else:
+        storage = ram.read(e, "wInventoryStorage", 16)
+        if want not in storage:
+            raise Stuck(f"{item} isn't in the inventory")
+        ram.poke(e, "wInventoryStorage", ram.u8(e, var), "equip", off=storage.index(want))
+    ram.poke(e, var, want, "equip")
+    ram.poke(e, "wStatusBarNeedsRefresh", ram.u8(e, "wStatusBarNeedsRefresh") | 1, "equip")
+    e.step(2)
 
 
 def item_button(e: Emu, item: str) -> str | None:
@@ -98,10 +120,11 @@ def item_button(e: Emu, item: str) -> str | None:
 
 
 def use(e: Emu, item: str, direction: str | None = None, after: int = 14) -> None:
-    """Face `direction` (if given) and use the equipped ITEM_* `item`."""
+    """Face `direction` (if given) and use ITEM_* `item` (equipping it on A if it isn't on a button)."""
     button = item_button(e, item)
     if button is None:
-        raise Stuck(f"{item} isn't equipped")
+        equip(e, item, "a")
+        button = "a"
     if direction:
         face(e, direction)
     tap(e, button, hold=2, after=after)
@@ -136,6 +159,10 @@ def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozense
                     direction = strike_at(e, (r, c), "SWORD", SWORD_OFFSETS, allow - BREAKERS)
                 elif how == "shovel":
                     direction = strike_at(e, (r, c), "SHOVEL", SHOVEL_OFFSETS, allow - BREAKERS, after=24)
+                elif how == "ember":
+                    select_seeds(e, "EMBER")
+                    direction = strike_at(e, (r, c), "SEED_SATCHEL", SEED_OFFSETS, allow - BREAKERS, after=4,
+                                          wait=wait_seeds_done)
                 else:
                     raise Stuck(f"breaking tiles with {how} isn't implemented")
             except Stuck as err:
@@ -156,11 +183,24 @@ def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozense
 # (itemParents/shovelParent.s) and the end of a sword slash (items/commonCode2.s, tryBreakTileWithSword).
 SHOVEL_OFFSETS = {"up": (-8, 0), "right": (4, 6), "down": (7, 0), "left": (4, -7)}
 SWORD_OFFSETS = {"up": (-14, 0), "right": (0, 13), "down": (13, 0), "left": (0, -14)}
+# A satchel seed is thrown forward and bursts on whatever it hits: standing right next to a tile works.
+SEED_OFFSETS = {"up": (-12, 0), "right": (0, 10), "down": (11, 0), "left": (0, -11)}
+SEEDS = ("EMBER", "SCENT", "PEGASUS", "GALE", "MYSTERY")
+
+
+def select_seeds(e: Emu, seed: str) -> None:
+    """Choose which seeds the satchel uses (a logged write, like picking them in the menu)."""
+    index = SEEDS.index(seed)
+    if ram.u8(e, "wSatchelSelectedSeeds") != index:
+        ram.poke(e, "wSatchelSelectedSeeds", index, "equip")
 
 
 def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple[int, int]],
-              allow: frozenset[str] | None = None, after: int = 14) -> str:
-    """Stand where using `item` hits metatile `tile`, use it, and return the facing direction used."""
+              allow: frozenset[str] | None = None, after: int = 14,
+              wait: Callable[[Emu], None] | None = None) -> str:
+    """Stand where using `item` hits metatile `tile`, use it until the tile changes, and return the facing
+    direction used. Spots lined up with the tile's center are preferred; `wait` runs after each use (e.g. for
+    an ember to burn out) before checking the tile."""
     r, c = tile
     g = nav.grid(e)
     ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
@@ -170,7 +210,10 @@ def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple
         for y in range(16 * r - oy, 16 * r - oy + 16):
             for x in range(16 * c - ox, 16 * c - ox + 16):
                 if 0 <= y < ok.shape[0] and 0 <= x < ok.shape[1] and ok[y, x]:
-                    spots.append((abs(y - y0) + abs(x - x0), d, y, x))
+                    # Off-center along the axis perpendicular to the throw/swing makes misses likelier.
+                    off = abs(x + ox - (16 * c + 8)) if d in ("up", "down") else abs(y + oy - (16 * r + 8))
+                    spots.append((abs(y - y0) + abs(x - x0) + 8 * off, d, y, x))
+    before = ram.u8(e, "wRoomLayout", r * 16 + c)
     errors = []
     for _, d, y, x in sorted(spots)[:6]:
         try:
@@ -179,11 +222,16 @@ def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple
             errors.append(f"{d}: {str(err).splitlines()[0]}")
             continue
         use(e, item, d, after=after)
-        return d
-    raise Stuck(f"no spot to hit {tile} with {item} from: {errors}")
+        if wait:
+            wait(e)
+        e.step(6)
+        if ram.u8(e, "wRoomLayout", r * 16 + c) != before:
+            return d
+        errors.append(f"{d} from {(y, x)}: no effect")
+    raise Stuck(f"couldn't hit {tile} with {item}: {errors}")
 
 
-BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel"})
+BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel", "ember"})
 
 
 def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max_frames: int = 1800,
@@ -254,7 +302,10 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
             wy, wx = plan[0]
             if len(plan) == 1 and target is not None:
                 wy, wx = target
-            e.set_buttons(_mask(steer(wy - pos[0], wx - pos[1])))
+            dy, dx = wy - pos[0], wx - pos[1]
+            if max(abs(dy), abs(dx)) > 2 * nav.STEP + 2:  # a ledge jump: walk straight into the cliff
+                dy, dx = (dy, 0) if abs(dy) > abs(dx) else (0, dx)
+            e.set_buttons(_mask(steer(dy, dx)))
             e.step()
             if len(plan) == 1 and pos == (wy, wx) and target is None:
                 plan = []
@@ -307,8 +358,13 @@ def exit_room(e: Emu, direction: str, allow: frozenset[str] | None = None, expec
 def travel_to(e: Emu, room: int, allow: frozenset[str] | None = None) -> None:
     """Walk across overworld screens to `room` (same group), routing over the surveyed room graph."""
 
-    for direction, lo, hi in world.plan_to(e, room):
+    allow = abilities(e) if allow is None else allow
+    hops = world.plan_to(e, room, allow)
+    for i, (direction, lo, hi) in enumerate(hops):
         group, rm = ram.room(e)
+        if direction == "ledge":
+            # Jump down into component `lo` of this room: walk toward the next exit; the planner takes the ledge.
+            continue
         exit_room(e, direction, allow, expect=(group, rm + world.DELTA[direction]), span=(lo, hi))
 
 
@@ -538,3 +594,17 @@ def pickup(e: Emu, obj_id: int = INTERAC_TREASURE, max_frames: int = 600) -> Non
     obj = find(e, "interaction", obj_id)
     walk_to(e, (obj.y, obj.x), tol=3, stop_on_scene=True, max_frames=max_frames)
     settle(e, quiet=30)
+
+
+def burn(e: Emu, tile: tuple[int, int]) -> None:
+    """Burn the tree/bush (or light the torch) at metatile `tile` with an Ember Seed from the satchel."""
+    select_seeds(e, "EMBER")
+    strike_at(e, tile, "SEED_SATCHEL", SEED_OFFSETS, after=4, wait=wait_seeds_done)
+    settle(e)
+
+
+def wait_seeds_done(e: Emu, max_frames: int = 300) -> None:
+    """Wait until no seed items (ITEM_EMBER_SEED..ITEM_MYSTERY_SEED) are active: embers break tiles when
+    they finish burning."""
+    lo, hi = ram.CONST["ITEM_EMBER_SEED"], ram.CONST["ITEM_MYSTERY_SEED"]
+    wait_until(e, lambda e: not any(lo <= o.id <= hi for o in ram.objects(e, "item")), max_frames, "seed to burn out")

@@ -25,7 +25,7 @@ STEP = 4  # lattice spacing (px) for planning
 TILETYPE = {v: k[9:] for k, v in ram.CONST.items() if k.startswith("TILETYPE_") and not k.startswith("TILETYPE_SS")}
 HAZARDS = {"HOLE", "WARPHOLE", "WATER", "LAVA", "SEAWATER", "WHIRLPOOL"}
 # Abilities -> BREAKABLETILESOURCE_* values they provide (constants/common/breakableTileSources.s).
-BREAK_SOURCES = {"bracelet": {0}, "sword": {1}, "sword2": {1, 2}, "bombs": {4}, "shovel": {6}}
+BREAK_SOURCES = {"bracelet": {0}, "sword": {1}, "sword2": {1, 2}, "bombs": {4}, "shovel": {6}, "ember": {12}}
 
 
 def table(name: str, mode: int) -> dict[int, int]:
@@ -140,7 +140,7 @@ def break_sources(kind: str) -> set[int]:
 def breaker(kind: str, allow: frozenset[str]) -> str | None:
     """The allowed ability that breaks this breakable tile kind, if any (sword preferred)."""
     sources = break_sources(kind)
-    for ability in ("sword", "sword2", "shovel", "bracelet"):
+    for ability in ("sword", "sword2", "shovel", "ember", "bracelet"):
         if ability in allow and BREAK_SOURCES[ability] & sources:
             return ability
     return None
@@ -216,6 +216,37 @@ def exclude_edges(cl: Clearance, exits: frozenset[str]) -> None:
         cl.v[zone] = False
 
 
+LEDGE_DIRS = {"u": (-1, 0), "d": (1, 0), "l": (0, -1), "r": (0, 1)}
+
+
+def ledges(g: Grid, cl: Clearance) -> dict[tuple[int, int], list[tuple[int, int]]]:
+    """One-way jumps off cliff tiles: lattice node next to a cliff (facing its jump direction) -> nodes where
+    Link can land past it. Jumping happens by walking into the cliff tile."""
+    H, W = cl.ok.shape
+    out: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for r in range(g.h):
+        for c in range(g.w):
+            k = g.kind[r][c]
+            if not k.startswith("cliff:"):
+                continue
+            dy, dx = LEDGE_DIRS[k[6]]
+            cy, cx = 16 * r + 8, 16 * c + 8  # tile center
+            # Approach node: just before the tile, centered on it; landing: first free node past it.
+            ay, ax = cy - dy * 16, cx - dx * 16
+            ay, ax = ay - ay % STEP, ax - ax % STEP
+            if not (0 <= ay < H and 0 <= ax < W and cl.ok[ay, ax]):
+                continue
+            for dist in range(12, 41, STEP):
+                ly, lx = cy + dy * dist, cx + dx * dist
+                ly, lx = ly - ly % STEP, lx - lx % STEP
+                if not (0 <= ly < H and 0 <= lx < W):
+                    break
+                if cl.ok[ly, lx]:
+                    out.setdefault((ay, ax), []).append((ly, lx))
+                    break
+    return out
+
+
 MOVES = ((-STEP, 0), (STEP, 0), (0, -STEP), (0, STEP), (-STEP, -STEP), (-STEP, STEP), (STEP, -STEP), (STEP, STEP))
 
 
@@ -227,6 +258,7 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
     `exits` = screen edges the path may enter (all others are avoided). Returns lattice waypoints."""
     cl = clearance(g, allow, blockers)
     exclude_edges(cl, exits)
+    jumps = ledges(g, cl)
     ok = cl.ok
     H, W = ok.shape
     if callable(goal):
@@ -274,11 +306,11 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
                 p = came[p]
             return out[::-1]
         y, x = p
-        for dy, dx in MOVES:
-            n = (y + dy, x + dx)
-            if not cl.can_move(p, n):
-                continue
-            nc = c + (math.sqrt(2) if dy and dx else 1.0) + extra(*n)
+        steps = [((y + dy, x + dx), math.sqrt(2) if dy and dx else 1.0) for dy, dx in MOVES
+                 if cl.can_move(p, (y + dy, x + dx))]
+        steps += [(n, 6.0) for n in jumps.get(p, ())]
+        for n, step_cost in steps:
+            nc = c + step_cost + extra(*n)
             if nc < cost.get(n, math.inf):
                 cost[n] = nc
                 came[n] = p
