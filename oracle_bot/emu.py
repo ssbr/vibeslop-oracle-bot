@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import io
+import warnings
 from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
-from pyboy import PyBoy
+
+warnings.filterwarnings("ignore", message="Using SDL2 binaries")
+from pyboy import PyBoy  # noqa: E402
 
 from .record import Log, Op
 
