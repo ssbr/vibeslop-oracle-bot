@@ -13,6 +13,7 @@ SYM: dict[str, tuple[int | None, int]] = {k: (v[0], v[1]) for k, v in _DATA["ram
 CONST: dict[str, int] = _DATA["const"]
 STRUCT: dict[str, dict[str, int]] = _DATA["structs"]
 TREASURES: dict[str, int] = _DATA["treasures"]
+TEXT: dict[str, str] = json.loads((Path(__file__).parent / "data" / "ages_text.json").read_text(encoding="utf-8"))
 OBJ = STRUCT["ObjectStruct"]
 
 # Room-flag tables by active group: present/past overworld and their small rooms share a table, likewise
@@ -129,6 +130,16 @@ def text_active(e: Emu) -> bool:
     return u8(e, "wTextIsActive") != 0
 
 
+def text_index(e: Emu) -> int:
+    """Index of the most recently shown text (group << 8 | index), as in the TX_xxxx names."""
+    lo, hi = read(e, "wTextIndex", 2)
+    return hi << 8 | lo
+
+
+def text(e: Emu) -> str:
+    return TEXT.get(f"{text_index(e):04x}", "?")
+
+
 def option_prompt(e: Emu) -> bool:
     return text_active(e) and u8(e, "wTextDisplayMode") == 1
 
@@ -148,6 +159,8 @@ def controllable(e: Emu) -> bool:
         and u8(e, "wPaletteThread_mode") == 0
         and u8(e, "wDisabledObjects") & 0x81 == 0
         and u8(e, "w1Link.state") == 1
+        # Link's object becomes LINK_CUTSCENE during scripted scenes; riding an animal is still player control.
+        and u8(e, "w1Link.id") in (CONST["SPECIALOBJECT_LINK"], CONST["SPECIALOBJECT_LINK_RIDING_ANIMAL"])
     )
 
 
@@ -163,9 +176,13 @@ class Obj:
     y: int
     x: int
     health: int
+    visible: bool
+    rad_y: int
+    rad_x: int
 
     def __str__(self) -> str:
-        return f"{self.kind}@{self.slot:02x} id={self.id:02x}:{self.subid:02x} st={self.state} y={self.y} x={self.x} hp={self.health}"
+        vis = "" if self.visible else " hidden"
+        return f"{self.kind}@{self.slot:02x} id={self.id:02x}:{self.subid:02x} st={self.state} y={self.y} x={self.x} hp={self.health}{vis}"
 
 
 def objects(e: Emu, kind: str) -> list[Obj]:
@@ -176,7 +193,8 @@ def objects(e: Emu, kind: str) -> list[Obj]:
         raw = e.read(base, 0x40, bank=1)
         if raw[OBJ["enabled"]]:
             out.append(Obj(kind, page, raw[OBJ["id"]], raw[OBJ["subid"]], raw[OBJ["state"]],
-                           raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]]))
+                           raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]], bool(raw[OBJ["visible"]] & 0x80),
+                           raw[OBJ["collisionRadiusY"]], raw[OBJ["collisionRadiusX"]]))
     return out
 
 
@@ -193,6 +211,8 @@ def summary(e: Emu) -> str:
         f" menu={u8(e, 'wOpenedMenuType')} scroll={u8(e, 'wScrollMode')} controllable={controllable(e)}",
         "owned: " + " ".join(owned),
     ]
+    if text_active(e):
+        lines.append(f"text TX_{text_index(e):04x}: " + text(e).replace("\n", " / "))
     for kind in ("interaction", "enemy"):
         objs = objects(e, kind)
         if objs:

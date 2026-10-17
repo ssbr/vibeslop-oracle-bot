@@ -210,6 +210,85 @@ class Layout:
         raise ValueError(f"unknown directive: {directive}")
 
 
+def parse_mode_table(path: Path, consts: dict[str, int]) -> dict[int, list[list[int]]]:
+    """Parse a tile-property table indexed by collision mode (wActiveCollisions 0-5): a `.dw`/`dbrel` list of
+    labels, then `.db` rows per label (stacked labels share rows), each list ended by `.db $00`."""
+    order: list[str] = []
+    rows: dict[str, list[list[int]]] = {}
+    pending: list[str] = []
+    current: list[str] = []
+
+    def val(tok: str) -> int:
+        out = 0
+        for part in tok.strip().rstrip(",").split("|"):
+            out |= consts[part] if part in consts else num(part)
+        return out
+
+    for raw in path.read_text().splitlines():
+        line = raw.split(";", 1)[0].strip()
+        if not line:
+            continue
+        m = re.match(r"(?:\.dw|dbrel)\s+(@\w+)", line)
+        if m and not current:
+            order.append(m.group(1))
+            continue
+        m = re.match(r"(@\w+):$", line)
+        if m:
+            rows[m.group(1)] = []
+            # A label in the middle of a list falls through: it shares the rest of that list.
+            (current if current else pending).append(m.group(1))
+            continue
+        if line.startswith(".db") and (pending or current):
+            if pending:
+                current, pending = pending, []
+            vals = [val(t) for t in re.split(r"[\s,]+", line[3:].strip()) if t]
+            if vals == [0]:
+                current = []
+                continue
+            for lbl in current:
+                rows[lbl].append(vals)
+        elif not line.startswith("."):
+            current = []
+    return {mode: rows.get(lbl, []) for mode, lbl in enumerate(order)}
+
+
+def parse_tiles(d: Path, consts: dict[str, int]) -> dict:
+    tp = d / "data" / "ages" / "tile_properties"
+    sources = {}
+    for line in (tp / "breakableTiles.s").read_text().splitlines():
+        m = re.match(r"\s*m_BreakableTileData %([01]+) %([01]+) %([01]+)", line)
+        if m:
+            bits = "".join(m.groups())
+            sources[len(sources)] = [i for i, b in enumerate(bits) if b == "1"]
+
+    def simple(name: str) -> dict[int, dict[int, int]]:
+        return {mode: {r[0]: r[1] for r in rs} for mode, rs in parse_mode_table(tp / name, consts).items()}
+
+    breakable = {mode: {tile: sources[m] for tile, m in tiles.items()} for mode, tiles in simple("breakableTiles.s").items()}
+    return {
+        "types": simple("tileTypeMappings.s"),
+        "cliffs": simple("cliffTiles.s"),
+        "warps": simple("warpTiles.s"),
+        "interactable": simple("interactableTiles.s"),
+        "breakable": breakable,
+    }
+
+
+def write_text_table(d: Path, out: Path) -> None:
+    """Text index (group << 8 | index, as in wTextIndex) -> text, from text/ages/text.yaml."""
+    import yaml
+
+    doc = yaml.safe_load((d / "text" / "ages" / "text.yaml").read_text(encoding="utf-8"))
+    table = {}
+    for group in doc["groups"]:
+        for entry in group["data"]:
+            indices = entry["index"] if isinstance(entry["index"], list) else [entry["index"]]
+            for i in indices:
+                table[f"{group['group'] << 8 | i:04x}"] = entry["text"]
+    out.write_text(json.dumps(table, indent=0, ensure_ascii=False), encoding="utf-8")
+    print(f"{len(table)} text entries -> {out.name}")
+
+
 def parse_linkfile(path: Path) -> tuple[dict[str, int], dict[str, str]]:
     origins, appendto = {}, {}
     for line in path.read_text().splitlines():
@@ -243,6 +322,8 @@ def main() -> int:
         elif not k.endswith(".size"):
             consts[k] = v
 
+    write_text_table(d, args.out.with_name("ages_text.json"))
+
     bad = [(k, a, ram[k][1]) for k, a in lay.comments.items()
            if k in ram and ram[k][1] != a and k not in KNOWN_BAD_COMMENTS]
     checked = sum(1 for k in lay.comments if k in ram)
@@ -261,6 +342,7 @@ def main() -> int:
         "ram": {k: [b, a] for k, (b, a) in sorted(ram.items(), key=lambda kv: (kv[1][0] or 0, kv[1][1]))},
         "structs": lay.structs,
         "treasures": treasures,
+        "tiles": parse_tiles(d, consts),
         "const": dict(sorted(consts.items())),
     }, indent=0))
     return 1 if bad else 0

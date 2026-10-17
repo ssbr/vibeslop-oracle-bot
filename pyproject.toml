@@ -16,7 +16,10 @@ llm = ["anthropic"]
 obot = "oracle_bot.cli:main"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = [
+    "pytest",
+    "pyyaml>=6.0.3",
+]
 
 [build-system]
 requires = ["hatchling"]
