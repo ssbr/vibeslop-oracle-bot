@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import cheats, menus, nav, ram
+from . import cheats, menus, nav, ram, video
 from .act import Stuck, settle
 from .config import Config
 from .emu import Emu, load_snapshot, save_snapshot
@@ -128,7 +128,7 @@ class Runner:
                         raise Stuck(f"{step.name}: finished but done() is false")
                 return
             except Stuck as err:
-                self.stuck_bundle(e, step, err, attempt)
+                self.stuck_bundle(e, step, err, attempt, pre)
                 if attempt == step.retries:
                     raise Failed(f"step {step.name} failed: {str(err).splitlines()[0]}") from err
                 # Emulation is deterministic: retry from the pre-step state after a short, different delay.
@@ -137,11 +137,14 @@ class Runner:
             finally:
                 self.cheats.suspended = False
 
-    def stuck_bundle(self, e: Emu, step: Step, err: Exception, attempt: int) -> None:
+    def stuck_bundle(self, e: Emu, step: Step, err: Exception, attempt: int,
+                     pre: tuple[bytes, int, int]) -> None:
         d = self.run_dir / "stuck" / f"{step.name}_{attempt}"
         d.mkdir(parents=True, exist_ok=True)
         e.set_buttons(0)
         save_snapshot(e, d / "snap")
+        # The last 15 seconds before getting stuck, re-rendered from the pre-step state.
+        video.render(e.log, max(pre[1], e.frame - 900), e.frame, d / "clip", base=pre)
         Image.fromarray(e.screen()).resize((320, 288), Image.NEAREST).save(d / "screen.png")
         tail = "\n".join(op.line() for op in e.log.ops[-200:])
         (d / "inspect.txt").write_text(

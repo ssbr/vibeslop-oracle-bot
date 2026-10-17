@@ -193,8 +193,9 @@ class Clearance:
         return bool(grid[p] and grid[n])
 
 
-def region(cl: Clearance, start: tuple[int, int]) -> set[tuple[int, int]]:
-    """Lattice nodes Link can walk to from `start` (snapped to the nearest free node)."""
+def region(cl: Clearance, start: tuple[int, int], air: Clearance | None = None) -> set[tuple[int, int]]:
+    """Lattice nodes Link can walk to from `start` (snapped to the nearest free node); with `air` (see `hops`),
+    also hopping gaps with the feather."""
     ok = cl.ok
     H, W = ok.shape
     sy, sx = (int(round(v / STEP) * STEP) for v in start)
@@ -206,8 +207,11 @@ def region(cl: Clearance, start: tuple[int, int]) -> set[tuple[int, int]]:
     queue = deque(seen)
     while queue:
         y, x = queue.popleft()
-        for n in ((y - STEP, x), (y + STEP, x), (y, x - STEP), (y, x + STEP)):
-            if n not in seen and cl.can_move((y, x), n):
+        steps = [n for n in ((y - STEP, x), (y + STEP, x), (y, x - STEP), (y, x + STEP)) if cl.can_move((y, x), n)]
+        if air is not None:
+            steps += hops(cl, air, (y, x))
+        for n in steps:
+            if n not in seen:
                 seen.add(n)
                 queue.append(n)
     return seen
@@ -276,6 +280,38 @@ def ledges(g: Grid, cl: Clearance) -> dict[tuple[int, int], list[tuple[int, int]
 
 
 MOVES = ((-STEP, 0), (STEP, 0), (0, -STEP), (0, STEP), (-STEP, -STEP), (-STEP, STEP), (STEP, -STEP), (STEP, STEP))
+# Roc's Feather: a running jump carries Link ~31px (measured), over a one-tile hole or stretch of water.
+HOP = 32
+JUMPABLE = frozenset({"hole", "water", "seawater", "lava"})
+
+
+def hops(cl: Clearance, air: Clearance, p: tuple[int, int]) -> list[tuple[int, int]]:
+    """Feather jumps from lattice node `p`: straight 32px hops that clear a gap (`air` = clearance with the
+    gaps' hazards counted as floor) and land on ground with a few pixels to spare."""
+    H, W = cl.ok.shape
+    y, x = p
+    out = []
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        n = (y + dy * HOP, x + dx * HOP)
+        short = (y + dy * (HOP - STEP), x + dx * (HOP - STEP))
+        if not (0 <= n[0] < H and 0 <= n[1] < W and cl.ok[n] and cl.ok[short]):
+            continue
+        flight = [(y + dy * d, x + dx * d) for d in range(STEP, HOP, STEP)]
+        if all(air.ok[q] for q in flight) and not all(cl.ok[q] for q in flight):
+            out.append(n)
+    return out
+
+
+def hop_between(g: Grid, a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """The straight segment a -> b passes over a jumpable gap (so it's a feather hop, not a ledge)."""
+    (ay, ax), (by, bx) = a, b
+    n = max(abs(by - ay), abs(bx - ax)) // STEP
+    for i in range(1, n):
+        y, x = ay + (by - ay) * i // n, ax + (bx - ax) * i // n
+        k = g.kind[y // 16][x // 16] if 0 <= y < g.h * 16 and 0 <= x < g.w * 16 else ""
+        if k.startswith("hazard:") and k[7:] in JUMPABLE:
+            return True
+    return False
 
 
 def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozenset(),
@@ -288,6 +324,7 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
     cl = clearance(g, allow, blockers, unblock)
     exclude_edges(cl, exits)
     jumps = ledges(g, cl)
+    air = clearance(g, allow | JUMPABLE, blockers, unblock) if "feather" in allow else None
     ok = cl.ok
     H, W = ok.shape
     if callable(goal):
@@ -338,6 +375,8 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
         steps = [((y + dy, x + dx), math.sqrt(2) if dy and dx else 1.0) for dy, dx in MOVES
                  if cl.can_move(p, (y + dy, x + dx))]
         steps += [(n, 6.0) for n in jumps.get(p, ())]
+        if air is not None:
+            steps += [(n, 12.0) for n in hops(cl, air, p)]
         for n, step_cost in steps:
             nc = c + step_cost + extra(*n)
             if nc < cost.get(n, math.inf):
@@ -356,11 +395,15 @@ def blockers(e: Emu) -> list[tuple[int, int, int, int]]:
     y, x = ram.link_px(e)
     out = []
     for o in ram.objects(e, "interaction"):
+        cart = o.id == ram.CONST["INTERAC_MINECART"]
+        if cart:  # no radius, but walking into a parked cart boards it
+            o.rad_y = o.rad_x = 8
         ry, rx = o.rad_y + ly, o.rad_x + lx
         # Solid NPCs have collision radii (set by their script's initcollisions). Followers that persist
-        # across screens (enabled & 3 == 3, like Impa) aren't solid, nor is anything Link already overlaps.
+        # across screens (enabled & 3 == 3, like Impa) aren't solid, nor is anything Link already overlaps
+        # (except a cart he's standing next to: stepping into it would board it).
         solid = o.visible and (o.rad_y or o.rad_x) and o.enabled & 3 != 3
-        if solid and not (abs(o.y - y) < ry and abs(o.x - x) < rx):
+        if solid and (cart or not (abs(o.y - y) < ry and abs(o.x - x) < rx)):
             out.append((o.y, o.x, ry, rx))
     return out
 

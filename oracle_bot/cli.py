@@ -101,6 +101,22 @@ def cmd_promote(args) -> int:
     return 0
 
 
+def cmd_video(args) -> int:
+    from . import video
+
+    run_dir = ROOT / "runs" / args.run
+    log = Log.load(run_dir / "replay.log")
+    if args.step:
+        start, end = video.step_range(run_dir, args.step)
+    else:
+        start, end = args.start, args.end
+    end = min(end, start + int(args.max_seconds * video.FPS))  # keep clips watchable
+    out = Path(args.out) if args.out else run_dir / "clips" / f"{args.step or start}_{start}-{end}"
+    path = video.render(log, start, end, out, base=video.nearest_state(run_dir, start))
+    print(f"{path}  (frames {start}-{end}, {(end - start) / video.FPS:.0f} s)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
     ap = argparse.ArgumentParser(prog="obot")
@@ -119,9 +135,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("sav")
     p = sub.add_parser("promote", help="copy a run's checkpoints into checkpoints/")
     p.add_argument("--run", default="main")
+    p = sub.add_parser("video", help="render a stretch of a run's replay to MP4 (GIF without ffmpeg)")
+    p.add_argument("--run", default="main")
+    p.add_argument("--step", help="a route step (or mark) name: the frames it took")
+    p.add_argument("--from", dest="start", type=int, default=0, help="first frame")
+    p.add_argument("--to", dest="end", type=int, default=0, help="end frame")
+    p.add_argument("--max-seconds", type=float, default=300, help="cut clips longer than this")
+    p.add_argument("-o", "--out", help="output path (default runs/<run>/clips/...)")
     args = ap.parse_args(argv)
     return {"steps": cmd_steps, "run": cmd_run, "inspect": cmd_inspect, "verify": cmd_verify,
-            "boot-sav": cmd_boot_sav, "promote": cmd_promote}[args.cmd](args)
+            "boot-sav": cmd_boot_sav, "promote": cmd_promote, "video": cmd_video}[args.cmd](args)
 
 
 if __name__ == "__main__":

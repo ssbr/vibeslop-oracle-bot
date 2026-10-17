@@ -90,12 +90,24 @@ def rooms_for(group: int, tier: int) -> dict[str, dict]:
     return {r: tiers[tier] for r, tiers in world().get(str(group), {}).items()}
 
 
-def component_at(rooms: dict[str, dict], room: int, y: int, x: int) -> int | None:
+def components_near(rooms: dict[str, dict], room: int, y: int, x: int, reach: int = 24) -> list[int]:
+    """Components of `room` with a sample node near (y, x), nearest first. Link can stand where no sample is
+    (doorways, between tiles), so the nearest one alone can be an isolated scrap."""
     info = rooms.get(str(room))
     if not info:
-        return None
-    best = min(info["comp"], key=lambda n: abs(n[0] - y) + abs(n[1] - x), default=None)
-    return best[2] if best else None
+        return []
+    out = []
+    for n in sorted(info["comp"], key=lambda n: abs(n[0] - y) + abs(n[1] - x)):
+        if out and abs(n[0] - y) + abs(n[1] - x) > reach:
+            break
+        if n[2] not in out:
+            out.append(n[2])
+    return out
+
+
+def component_at(rooms: dict[str, dict], room: int, y: int, x: int) -> int | None:
+    near = components_near(rooms, room, y, x)
+    return near[0] if near else None
 
 
 # Fairies' Woods (present): until GLOBALFLAG_FOREST_UNSCRAMBLED, leaving these rooms goes where this table
@@ -119,10 +131,10 @@ def neighbor(r: int, d: str, scramble: dict[tuple[int, int], int] | None = None)
 
 
 def route(rooms: dict[str, dict], room: int, comp: int | None, target: int,
-          scramble: dict[tuple[int, int], int] | None = None,
-          target_comp: int | None = None) -> list[tuple[str, int, int, int]] | None:
+          scramble: dict[tuple[int, int], int] | None = None, target_comp: int | None = None,
+          banned: frozenset[tuple[int, str, int, int]] = frozenset()) -> list[tuple[str, int, int, int]] | None:
     """Shortest list of (direction, lo, hi, next room) hops from (room, comp) to `target` room (to its
-    component `target_comp`, if given)."""
+    component `target_comp`, if given), avoiding `banned` (room, direction, lo, hi) hops."""
     starts = [(room, comp)] if comp is not None else [(room, c) for c in {s[0] for d in rooms[str(room)]["edges"].values() for s in d}]
     prev: dict[tuple[int, int], tuple[tuple[int, int], tuple[str, int, int, int]] | None] = {s: None for s in starts}
     queue = deque(starts)
@@ -149,21 +161,27 @@ def route(rooms: dict[str, dict], room: int, comp: int | None, target: int,
                     continue
                 for nc, nlo, nhi in rooms[str(nr)]["edges"][OPPOSITE[d]]:
                     a, b = max(lo, nlo), min(hi, nhi)
-                    if a <= b and (nr, nc) not in prev:
+                    if a <= b and (nr, nc) not in prev and (r, d, a, b) not in banned:
                         prev[(nr, nc)] = ((r, c), (d, a, b, nr))
                         queue.append((nr, nc))
     return None
 
 
-def plan_to(e: Emu, target: int, allow: frozenset[str],
-            at: tuple[int, int] | None = None) -> list[tuple[str, int, int, int]]:
-    """Hops to room `target` (to the part of it containing pixel `at`, if given); [] if already there."""
+def plan_to(e: Emu, target: int, allow: frozenset[str], at: tuple[int, int] | None = None,
+            banned: frozenset[tuple[int, str, int, int]] = frozenset()) -> list[tuple[str, int, int, int]]:
+    """Hops to room `target` (to the part of it containing pixel `at`, if given); [] if already there.
+    `banned` hops (room, direction, lo, hi) turned out impassable (the surveys show the world as it was then:
+    a gate open since may still be shut)."""
     group, room = ram.room(e)
     y, x = ram.link_px(e)
     rooms = rooms_for(group, tier_for(allow))
     scramble = FOREST_SCRAMBLE if group == 0 and not ram.gflag(e, "FOREST_UNSCRAMBLED") else None
     target_comp = component_at(rooms, target, *at) if at else None
-    hops = route(rooms, room, component_at(rooms, room, y, x), target, scramble, target_comp)
+    hops = None
+    for comp in components_near(rooms, room, y, x) or [None]:
+        hops = route(rooms, room, comp, target, scramble, target_comp, banned)
+        if hops is not None:
+            break
     if hops is None:
         raise KeyError(f"no surveyed route from {group}:{room:02x} to {group}:{target:02x}")
     return hops

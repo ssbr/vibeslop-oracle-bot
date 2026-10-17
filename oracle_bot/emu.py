@@ -153,13 +153,32 @@ class Emu:
         self.pyboy.stop(save=False)
 
 
-def replay(log: Log, until: int | None = None, on_op: Callable[[Emu, Op], None] | None = None) -> Emu:
-    """Re-simulate a log from power-on. Stops at `until` (a frame) or at the end. Returns the emulator."""
+def replay(log: Log, until: int | None = None, on_op: Callable[[Emu, Op], None] | None = None,
+           base: tuple[bytes, int, int] | None = None, frames_from: int | None = None,
+           on_frame: Callable[[Emu], None] | None = None) -> Emu:
+    """Re-simulate a log from power-on (or from `base` = (state, frame, n_ops), a snapshot taken while the log
+    was recorded). Stops at `until` (a frame) or at the end. From frame `frames_from` on, every frame is rendered
+    and passed to `on_frame`. Returns the emulator."""
     emu = Emu()
-    for op in log.ops:
+    ops = log.ops
+    if base is not None:
+        blob, frame, n_ops = base
+        emu.load(blob, frame)
+        ops = log.ops[n_ops:]
+
+    def advance(to: int) -> None:
+        if on_frame is None or frames_from is None or to <= frames_from:
+            emu.step(to - emu.frame)
+            return
+        emu.step(max(0, frames_from - emu.frame))
+        while emu.frame < to:
+            emu.step(1, render=True)
+            on_frame(emu)
+
+    for op in ops:
         if until is not None and op.frame >= until:
             break
-        emu.step(op.frame - emu.frame)
+        advance(op.frame)
         if op.op == "J":
             emu.set_buttons(int(op.args, 16))
         elif op.op == "W":
@@ -173,7 +192,7 @@ def replay(log: Log, until: int | None = None, on_op: Callable[[Emu, Op], None] 
         if on_op:
             on_op(emu, op)
     if until is not None:
-        emu.step(until - emu.frame)
+        advance(until)
     return emu
 
 
