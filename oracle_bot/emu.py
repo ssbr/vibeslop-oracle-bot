@@ -31,12 +31,14 @@ def mask_of(buttons: str) -> int:
 
 
 class Emu:
-    def __init__(self, log: Log | None = None, rom: Path = ROM):
+    def __init__(self, log: Log | None = None, rom: Path = ROM, sram: bytes | None = None):
+        """`sram` boots with an existing battery save (only for inspecting exported saves; replays always
+        start from zeroed SRAM)."""
         self.rom = rom
         self.log = log if log is not None else Log.new(rom, version("pyboy"))
         self.pyboy = PyBoy(
             str(rom), window="null", sound_emulated=True, cgb=True,
-            ram_file=io.BytesIO(bytes(SRAM_SIZE)), log_level="ERROR",
+            ram_file=io.BytesIO(sram if sram is not None else bytes(SRAM_SIZE)), log_level="ERROR",
         )
         self.frame = 0
         self.mask = 0
@@ -133,15 +135,19 @@ class Emu:
         self.pyboy.save_state(buf)
         return buf.getvalue()
 
-    def load(self, blob: bytes, frame: int) -> None:
-        """Restore a state taken at `frame`. Ops logged at or after `frame` are discarded."""
+    def load(self, blob: bytes, frame: int, n_ops: int | None = None) -> None:
+        """Restore a state taken at `frame`, when the log had `n_ops` ops (later ops are discarded;
+        without n_ops, ops at or after `frame` are)."""
         self.pyboy.load_state(io.BytesIO(blob))
         for name in BUTTONS:  # joypad state is not part of PyBoy states
             self.pyboy.button_release(name)
         self.mask = 0
         self.frame = frame
         self.rendered = False
-        self.log.truncate(frame)
+        if n_ops is None:
+            self.log.truncate(frame)
+        else:
+            del self.log.ops[n_ops:]
 
     def close(self) -> None:
         self.pyboy.stop(save=False)
@@ -174,3 +180,22 @@ def replay(log: Log, until: int | None = None, on_op: Callable[[Emu, Op], None] 
 def check_bank(addr: int, bank: int | None) -> None:
     if 0xD000 <= addr < 0xE000 and bank is None:
         raise ValueError(f"${addr:04x} is in switchable WRAM; pass an explicit bank")
+
+
+def save_snapshot(e: Emu, path: Path) -> None:
+    """Write `<path>.state`, `.log` and `.json`: everything needed to resume (and replay) from here."""
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.with_suffix(".state").write_bytes(e.state())
+    e.log.save(path.with_suffix(".log"))
+    path.with_suffix(".json").write_text(json.dumps({"frame": e.frame, "n_ops": len(e.log.ops)}))
+
+
+def load_snapshot(path: Path) -> Emu:
+    import json
+
+    meta = json.loads(path.with_suffix(".json").read_text())
+    e = Emu(log=Log.load(path.with_suffix(".log")))
+    e.load(path.with_suffix(".state").read_bytes(), meta["frame"], meta["n_ops"])
+    return e

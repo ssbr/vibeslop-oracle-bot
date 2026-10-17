@@ -36,7 +36,7 @@ def wait_until(e: Emu, pred: Callable[[Emu], bool], max_frames: int, what: str =
     raise Stuck(f"timed out after {max_frames} frames waiting for {what}")
 
 
-def settle(e: Emu, choices: Sequence[int] = (), max_frames: int = 60 * 60, quiet: int = 1) -> None:
+def settle(e: Emu, choices: Sequence[int] = (), max_frames: int = 60 * 60 * 5, quiet: int = 1) -> None:
     """Advance text/cutscenes until Link has been controllable for `quiet` consecutive frames. Option prompts
     consume `choices` in order; an option prompt with no choice left raises Stuck (blindly accepting the
     default is never safe)."""
@@ -77,9 +77,10 @@ def steer(dy: int, dx: int) -> str:
 
 
 def walk_to(e: Emu, goal, allow: frozenset[str] = frozenset(), tol: int = 1, max_frames: int = 1800,
-            settle_text: bool = True, leave_ok: bool = False) -> None:
+            settle_text: bool = True, leave_ok: bool = False, stop_on_scene: bool = False) -> None:
     """Walk Link to `goal`: a (y, x) pixel target or a predicate goal(y, x). Plans with nav.path and follows
-    the path closed-loop, replanning when progress stalls. Leaves buttons released."""
+    the path closed-loop, replanning when progress stalls. Leaves buttons released.
+    stop_on_scene: return as soon as a scripted scene takes control (the walk was only meant to trigger it)."""
     from . import nav  # local import: nav imports ram, act is imported by menus
 
     target = None if callable(goal) else goal
@@ -95,6 +96,8 @@ def walk_to(e: Emu, goal, allow: frozenset[str] = frozenset(), tol: int = 1, max
                 raise Stuck(f"walk_to {goal}: out of time at {ram.link_px(e)}")
             if not ram.controllable(e):
                 e.set_buttons(0)
+                if stop_on_scene:
+                    return
                 if ram.text_active(e) and not settle_text:
                     raise Stuck("walk_to: text appeared")
                 if ram.text_active(e):
@@ -116,7 +119,8 @@ def walk_to(e: Emu, goal, allow: frozenset[str] = frozenset(), tol: int = 1, max
             if not plan or still > 12:
                 g = nav.grid(e)
                 avoid = [(o.y, o.x, 12) for o in ram.objects(e, "enemy")]
-                plan = nav.path(g, pos, goal, allow, avoid, nav.blockers(e)) or []
+                # NPCs move (and some follow Link), so fall back to ignoring them when they wall Link in.
+                plan = nav.path(g, pos, goal, allow, avoid, nav.blockers(e)) or nav.path(g, pos, goal, allow, avoid) or []
                 if not plan:
                     raise Stuck(f"walk_to: no path from {pos} to {goal}\n{nav.ascii(e, g)}")
                 replans += 1 if still > 12 else 0
@@ -175,6 +179,80 @@ def travel(e: Emu, *hops: int | str, allow: frozenset[str] = frozenset()) -> Non
         if direction is None:
             raise ValueError(f"room {hop:02x} isn't adjacent to {rm:02x}")
         exit_room(e, direction, allow, expect=(group, hop))
+
+
+def find(e: Emu, kind: str, obj_id: int, subid: int | None = None) -> ram.Obj:
+    objs = [o for o in ram.objects(e, kind) if o.id == obj_id and (subid is None or o.subid == subid)]
+    if not objs:
+        raise Stuck(f"no {kind} {obj_id:02x}:{subid} in room {ram.room(e)}")
+    return objs[0]
+
+
+def face(e: Emu, direction: str) -> None:
+    """Turn Link without (meaningfully) moving: a 1-frame tap."""
+    tap(e, direction, hold=1, after=2)
+
+
+def approach(e: Emu, obj: ram.Obj, sides: str = "durl", allow: frozenset[str] = frozenset()) -> str:
+    """Walk next to `obj` (touching its collision box) and face it. Returns the side Link ended up on."""
+    ly, lx = ram.u8(e, "w1Link.collisionRadiusY"), ram.u8(e, "w1Link.collisionRadiusX")
+    ry, rx = obj.rad_y + ly, obj.rad_x + lx
+    spots = {"d": ((obj.y + ry, obj.x), "up"), "u": ((obj.y - ry, obj.x), "down"),
+             "l": ((obj.y, obj.x - rx), "right"), "r": ((obj.y, obj.x + rx), "left")}
+    errors = []
+    for side in sides:
+        (ty, tx), facing = spots[side]
+        try:
+            walk_to(e, lambda y, x, ty=ty, tx=tx: abs(y - ty) <= 3 and abs(x - tx) <= 3, allow)
+        except Stuck as err:
+            errors.append(f"{side}: {str(err).splitlines()[0]}")
+            continue
+        face(e, facing)
+        return side
+    raise Stuck(f"can't reach {obj}: " + "; ".join(errors))
+
+
+def talk(e: Emu, obj_id: int, subid: int | None = None, choices: Sequence[int] = (), sides: str = "durl",
+         quiet: int = 1) -> None:
+    """Talk to an interaction (NPC) and advance its text, answering prompts with `choices`."""
+    approach(e, find(e, "interaction", obj_id, subid), sides)
+    tap(e, "a", hold=1, after=4)
+    wait_until(e, lambda e: not ram.controllable(e), 30, "NPC to respond")
+    settle(e, choices, quiet=quiet)
+
+
+def play_until(e: Emu, pred: Callable[[Emu], bool], max_frames: int = 60 * 60 * 5, choices: Sequence[int] = (),
+               what: str = "scene") -> None:
+    """Let a scripted scene play (advancing text, answering prompts with `choices`) until pred(e)."""
+    choices = list(choices)
+    start = e.frame
+    while not pred(e):
+        if e.frame - start > max_frames:
+            raise Stuck(f"play_until {what}: timed out\n{ram.summary(e)}")
+        if ram.option_prompt(e) and text_done(e):
+            if not choices:
+                raise Stuck(f"play_until {what}: unexpected option prompt TX_{ram.text_index(e):04x}")
+            choose_option(e, choices.pop(0))
+        elif ram.text_active(e):
+            tap(e, "a", hold=1, after=3)
+        else:
+            e.step()
+
+
+OPPOSITE = {"up": "d", "down": "u", "left": "r", "right": "l"}
+
+
+def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120) -> None:
+    """Push an interaction (e.g. a stone) one step in `direction`."""
+    obj = find(e, "interaction", obj_id)
+    approach(e, obj, OPPOSITE[direction])
+    y0, x0 = obj.y, obj.x
+    e.set_buttons(mask_of(direction))
+    try:
+        wait_until(e, lambda e: (lambda o: abs(o.y - y0) + abs(o.x - x0) >= 12)(find(e, "interaction", obj_id)),
+                   max_frames, f"push {obj_id:02x} {direction}")
+    finally:
+        e.set_buttons(0)
 
 
 def text_done(e: Emu) -> bool:

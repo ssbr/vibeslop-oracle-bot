@@ -60,3 +60,18 @@ def new_game(e: Emu, name: str, message_speed: int = 3) -> None:
         tap(e, "right" if cur < message_speed else "left", after=8)
     tap(e, "a", after=10)
     wait_until(e, lambda e: ram.u8(e, "wGameState") == 2, 600, "game start")
+
+
+def save_game(e: Emu) -> None:
+    """In-game save via the START+SELECT menu ("SAVE & CONT."), returning to gameplay."""
+    if not ram.controllable(e):
+        raise Stuck("save_game: Link isn't controllable")
+    tap(e, "start+select", hold=2, after=40)
+    if ram.u8(e, "wOpenedMenuType") != 3:
+        raise Stuck("save_game: save menu didn't open")
+    for _ in range(4):
+        if ram.u8(e, "wSaveQuitMenu.cursorIndex") == 1:
+            break
+        tap(e, "down", after=10)
+    tap(e, "a", after=10)
+    wait_until(e, ram.controllable, 600, "return from save menu")

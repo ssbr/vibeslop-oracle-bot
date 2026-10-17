@@ -150,9 +150,7 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
 
     sy, sx = snap(start[0]), snap(start[1])
     starts = [(sy + dy, sx + dx) for dy in (0, -STEP, STEP) for dx in (0, -STEP, STEP)]
-    starts = [p for p in starts if 0 <= p[0] < H and 0 <= p[1] < W and ok[p]]
-    if not starts:
-        return None
+    starts = [p for p in starts if 0 <= p[0] < H and 0 <= p[1] < W and ok[p]] or [(sy, sx)]
 
     def h(y: int, x: int) -> float:
         if target is None:
@@ -198,7 +196,15 @@ ASCII = {"free": ".", "solid": "#", "partial": ":", "warp": "D", "stairs": "=", 
 def blockers(e: Emu) -> list[tuple[int, int, int, int]]:
     """Visible interactions (NPCs, pushable rocks...) as (y, x, ry, rx) exclusion zones for Link's center."""
     ly, lx = ram.u8(e, "w1Link.collisionRadiusY"), ram.u8(e, "w1Link.collisionRadiusX")
-    return [(o.y, o.x, o.rad_y + ly, o.rad_x + lx) for o in ram.objects(e, "interaction") if o.visible]
+    y, x = ram.link_px(e)
+    out = []
+    for o in ram.objects(e, "interaction"):
+        ry, rx = o.rad_y + ly, o.rad_x + lx
+        # Objects with enabled bit 7 (followers like Impa, effects like floating notes) aren't solid, and
+        # neither is anything Link already overlaps.
+        if o.visible and not o.enabled & 0x80 and not (abs(o.y - y) < ry and abs(o.x - x) < rx):
+            out.append((o.y, o.x, ry, rx))
+    return out
 
 
 def ascii(e: Emu, g: Grid | None = None) -> str:

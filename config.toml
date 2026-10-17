@@ -1,0 +1,12 @@
+# Bot configuration. Names use the in-game name-entry characters (A-Z, a-z), 1-5 characters.
+
+[player]
+file_name = "Link"
+child_name = "Pip"     # Bipin & Blossom's child; set this to the name from your old save
+donation = 150         # doctor money when the baby is sick (after 2 essences): 150, 50, 10 or 1
+stone_push = "right"   # which way to push the ▲ rock in the intro (cosmetic)
+message_speed = 3      # 1-5, chosen at file creation
+
+[cheats]
+health = true          # keep hearts full
+ammo = true            # keep seeds/bombs at capacity (only for items you own)

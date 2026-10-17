@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PIL import Image
 
 from . import nav, ram
-from .emu import ROOT, Emu
+from .emu import ROOT, Emu, load_snapshot, save_snapshot
 
 DEV = ROOT / "runs" / "dev"
 
 
 def save(e: Emu, name: str) -> Path:
-    """Save state + log so work can resume from here (log is kept so the run stays replayable)."""
-    DEV.mkdir(parents=True, exist_ok=True)
-    (DEV / f"{name}.state").write_bytes(e.state())
-    e.log.save(DEV / f"{name}.log")
-    (DEV / f"{name}.json").write_text(json.dumps({"frame": e.frame}))
-    return DEV / f"{name}.state"
+    save_snapshot(e, DEV / name)
+    return DEV / name
 
 
 def load(name: str) -> Emu:
-    from .record import Log
-
-    log = Log.load(DEV / f"{name}.log")
-    e = Emu(log=log)
-    e.load((DEV / f"{name}.state").read_bytes(), json.loads((DEV / f"{name}.json").read_text())["frame"])
-    return e
+    return load_snapshot(DEV / name)
 
 
 def inspect(e: Emu, png: str | Path | None = "runs/dev/inspect.png", scale: int = 2) -> str:

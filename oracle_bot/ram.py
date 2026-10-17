@@ -179,6 +179,7 @@ class Obj:
     visible: bool
     rad_y: int
     rad_x: int
+    enabled: int
 
     def __str__(self) -> str:
         vis = "" if self.visible else " hidden"
@@ -194,7 +195,8 @@ def objects(e: Emu, kind: str) -> list[Obj]:
         if raw[OBJ["enabled"]]:
             out.append(Obj(kind, page, raw[OBJ["id"]], raw[OBJ["subid"]], raw[OBJ["state"]],
                            raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]], bool(raw[OBJ["visible"]] & 0x80),
-                           raw[OBJ["collisionRadiusY"]], raw[OBJ["collisionRadiusX"]]))
+                           # Radii are 0 until an NPC's script runs initcollisions; 6 is the usual value.
+                           raw[OBJ["collisionRadiusY"]] or 6, raw[OBJ["collisionRadiusX"]] or 6, raw[OBJ["enabled"]]))
     return out
 
 

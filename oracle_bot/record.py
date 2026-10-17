@@ -76,3 +76,26 @@ class Log:
             frame, op, *rest = line.split(" ", 2)
             log.ops.append(Op(int(frame), op, rest[0] if rest else ""))
         return log
+
+
+SAVE_SLOT_SIZE = 0x550
+SAVE_SLOTS = ((0x0010, 0x1000), (0x0560, 0x1550), (0x0AB0, 0x1AA0))  # (primary, backup) offsets in SRAM
+SAVE_SIGNATURE = b"Z21216-0"
+
+
+def slot_checksum(slot: bytes) -> int:
+    return sum(int.from_bytes(slot[i:i + 2], "little") for i in range(2, SAVE_SLOT_SIZE, 2)) & 0xFFFF
+
+
+def validate_sav(sram: bytes, slot: int = 0) -> list[str]:
+    """Problems with save slot `slot` in a raw 8 KiB SRAM image ([] = valid)."""
+    problems = []
+    if len(sram) != 0x2000:
+        problems.append(f"size {len(sram)} != 8192")
+    for which, off in zip(("primary", "backup"), SAVE_SLOTS[slot]):
+        data = sram[off:off + SAVE_SLOT_SIZE]
+        if data[2:10] != SAVE_SIGNATURE:
+            problems.append(f"{which}: bad signature {data[2:10]!r}")
+        elif int.from_bytes(data[:2], "little") != slot_checksum(data):
+            problems.append(f"{which}: bad checksum")
+    return problems
