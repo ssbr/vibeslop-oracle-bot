@@ -9,6 +9,7 @@ from oracle_bot.runner import Route
 from .common import CFG, LYNNA_PORTAL, LYNNA_PORTAL_STAND, NAYRU_PORTAL
 
 R = Route()
+MISC_1 = ram.CONST["INTERAC_MISCELLANEOUS_1"]  # (subids 0a-0c: the bombs, rope and flippers lying about)
 
 
 @R.step(done=lambda e: ram.gflag(e, "TALKED_TO_CHEVAL"),
@@ -74,10 +75,7 @@ def chevals_grave(e):
         act.exit_room(e, direction)
     act.pull_lever(e)
     act.walk_to(e, (40, 184))  # (126 frames at most; the blocks close in ~250)
-    flippers = act.find(e, "interaction", ram.CONST["INTERAC_MISCELLANEOUS_1"], 0x0C)
-    act.approach(e, flippers, "d")
-    act.hold_until(e, "up", lambda e: ram.has(e, "FLIPPERS"), 60, "flippers")
-    act.settle(e, quiet=30)
+    act.collect(e, act.find(e, "interaction", MISC_1, 0x0C), "d", lambda e: ram.has(e, "FLIPPERS"))
 
 
 @R.step(done=lambda e: ram.has(e, "CHEVAL_ROPE"),
@@ -86,10 +84,7 @@ def chevals_grave(e):
 def cheval_rope(e):
     act.exit_room(e, "up")
     act.exit_room(e, "left", span=(48, 80))
-    rope = act.find(e, "interaction", ram.CONST["INTERAC_MISCELLANEOUS_1"], 0x0B)
-    act.approach(e, rope, "r")
-    act.hold_until(e, "left", lambda e: ram.has(e, "CHEVAL_ROPE"), 60, "Cheval Rope")
-    act.settle(e, quiet=30)
+    act.collect(e, act.find(e, "interaction", MISC_1, 0x0B), "r", lambda e: ram.has(e, "CHEVAL_ROPE"))
     act.exit_room(e, "down")
     act.enter(e, (8, 10), "down")
     act.exit_room(e, "down")

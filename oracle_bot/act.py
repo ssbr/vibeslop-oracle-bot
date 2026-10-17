@@ -204,6 +204,26 @@ def moosh_float(e: Emu, *waypoints: tuple[int, int], max_frames: int = 300) -> N
     settle(e)
 
 
+def steer_through(e: Emu, *waypoints: tuple[int, int], tol: int = 3, max_frames: int = 900) -> None:
+    """Steer Link through pixel `waypoints` with no path planning, re-aiming every frame: for movement with
+    drift the planner doesn't model (sidescrolling water)."""
+    points = list(waypoints)
+    try:
+        for _ in range(max_frames):
+            y, x = ram.link_px(e)
+            ty, tx = points[0]
+            if abs(ty - y) <= tol and abs(tx - x) <= tol:
+                points.pop(0)
+                if not points:
+                    return
+                continue
+            e.set_buttons(_mask(steer(ty - y if abs(ty - y) > tol else 0, tx - x if abs(tx - x) > tol else 0)))
+            e.step()
+    finally:
+        e.set_buttons(0)
+    raise Stuck(f"steer_through: didn't reach {points[0]} (at {ram.link_px(e)})")
+
+
 def play_harp(e: Emu) -> None:
     """Play the Harp's current tune and wait for the song to finish (it freezes everything but Link, who
     can't move until it ends)."""
@@ -447,6 +467,13 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
             dy, dx = wy - pos[0], wx - pos[1]
             if max(abs(dy), abs(dx)) > 2 * nav.STEP + 2:
                 along, across = (dy, dx) if abs(dy) > abs(dx) else (dx, dy)
+                straight = (pos[0], wx) if abs(dy) > abs(dx) else (wy, pos[1])  # in line with the landing
+                if "feather" in allow and abs(across) > 2 and nav.hop_between(g, straight, (wy, wx)):
+                    # Off line with a hop's landing (the takeoff node was dropped a little early): line up
+                    # first, since walking on would step into the gap.
+                    e.set_buttons(_mask(steer(0, dx) if abs(dy) > abs(dx) else steer(dy, 0)))
+                    e.step()
+                    continue
                 if "feather" in allow and abs(across) <= 2 and nav.hop_between(g, pos, (wy, wx)):
                     # Feather hop over a gap, from the takeoff node.
                     try:
@@ -636,6 +663,13 @@ def talk(e: Emu, obj_id: int, subid: int | None = None, choices: Sequence[int] =
     tap(e, "a", hold=1, after=4)
     wait_until(e, lambda e: not ram.controllable(e), 30, "NPC to respond")
     settle(e, choices, quiet=quiet)
+
+
+def collect(e: Emu, obj: ram.Obj, side: str, got: Callable[[Emu], bool], max_frames: int = 60) -> None:
+    """Walk into an item that's picked up by touch (approaching it from `side`, as for approach()) until got(e)."""
+    approach(e, obj, side)
+    hold_until(e, {"d": "up", "u": "down", "l": "right", "r": "left"}[side], got, max_frames, f"collect {obj}")
+    settle(e, quiet=30)
 
 
 def talk_companion(e: Emu, quiet: int = 30) -> None:

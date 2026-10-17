@@ -95,6 +95,15 @@ def tier_for(allow: frozenset[str]) -> int:
     return max(i for i, t in enumerate(TIERS) if t <= allow | {"sword"})
 
 
+def tiers_to_try(allow: frozenset[str]) -> list[int]:
+    """The surveyed tier Link fully qualifies for, then (the tiers are nested, but items can be lost again:
+    Crescent Island's thieves, the Tokay trading hut) the smallest one covering everything he can do, which
+    may route through something he can't do any more (travel_to bans such hops and replans)."""
+    exact = tier_for(allow)
+    covering = next(i for i, t in enumerate(TIERS) if t >= allow & TIERS[-1])
+    return [exact] if covering <= exact else [exact, covering]
+
+
 def rooms_for(group: int, tier: int) -> dict[str, dict]:
     return {r: tiers[tier] for r, tiers in world().get(str(group), {}).items()}
 
@@ -183,14 +192,12 @@ def plan_to(e: Emu, target: int, allow: frozenset[str], at: tuple[int, int] | No
     a gate open since may still be shut)."""
     group, room = ram.room(e)
     y, x = ram.link_px(e)
-    rooms = rooms_for(group, tier_for(allow))
     scramble = FOREST_SCRAMBLE if group == 0 and not ram.gflag(e, "FOREST_UNSCRAMBLED") else None
-    target_comp = component_at(rooms, target, *at) if at else None
-    hops = None
-    for comp in components_near(rooms, room, y, x) or [None]:
-        hops = route(rooms, room, comp, target, scramble, target_comp, banned)
-        if hops is not None:
-            break
-    if hops is None:
-        raise KeyError(f"no surveyed route from {group}:{room:02x} to {group}:{target:02x}")
-    return hops
+    for tier in tiers_to_try(allow):
+        rooms = rooms_for(group, tier)
+        target_comp = component_at(rooms, target, *at) if at else None
+        for comp in components_near(rooms, room, y, x) or [None]:
+            hops = route(rooms, room, comp, target, scramble, target_comp, banned)
+            if hops is not None:
+                return hops
+    raise KeyError(f"no surveyed route from {group}:{room:02x} to {group}:{target:02x}")
