@@ -1,0 +1,7 @@
+/roms/
+/vendor/
+/runs/
+/.venv/
+__pycache__/
+*.pyc
+*.ram
