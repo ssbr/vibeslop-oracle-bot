@@ -16,18 +16,10 @@ from oracle_bot.runner import Route
 R = Route()
 
 D1 = 1
-INTERAC_COLORED_CUBE = 0x19
 
 
 def room_item_taken(room: int):
     return lambda e: ram.room_flag(e, 4, room, 0x20)
-
-
-def roll_cube(e, direction: str, times: int) -> None:
-    for _ in range(times):
-        act.push_object(e, INTERAC_COLORED_CUBE, direction)
-        act.wait_until(e, ram.controllable, 120, "cube to finish rolling")
-        e.step(20)
 
 
 @R.step(done=lambda e: ram.dungeon(e) == D1 or ram.essences(e) >= 1)
@@ -42,7 +34,7 @@ def d1_ghini_key(e):
     act.fight(e)
     act.push_tile(e, (4, 10), "right")
     act.exit_room(e, "up")
-    roll_cube(e, "up", 3)
+    act.roll_cube(e, "up", 3)
     act.exit_room(e, "right")
     act.fight(e)
     act.exit_room(e, "up")

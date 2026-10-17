@@ -66,6 +66,7 @@ def settle(e: Emu, choices: Sequence[int] = (), max_frames: int = 60 * 60 * 5, q
 
 
 DIRS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+DIRECTION_INDEX = {"up": 0, "right": 1, "down": 2, "left": 3}  # w1Link.direction
 
 
 def steer(dy: int, dx: int) -> str:
@@ -132,6 +133,23 @@ def use(e: Emu, item: str, direction: str | None = None, after: int = 14) -> Non
 
 def slash(e: Emu, direction: str) -> None:
     use(e, "SWORD", direction)
+
+
+def jump(e: Emu, direction: str | None = None, max_frames: int = 90) -> None:
+    """Jump with Roc's Feather, moving `direction` (None: straight up) until Link lands."""
+    button = item_button(e, "FEATHER")
+    if button is None:
+        equip(e, "FEATHER", "a")
+        button = "a"
+    move = mask_of(direction) if direction else 0
+    e.set_buttons(move | mask_of(button))
+    e.step(2)
+    e.set_buttons(move)
+    try:
+        wait_until(e, lambda e: ram.u8(e, "wLinkInAir") != 0, 10, "takeoff")
+        wait_until(e, lambda e: ram.u8(e, "wLinkInAir") == 0, max_frames, "landing")
+    finally:
+        e.set_buttons(0)
 
 
 def play_harp(e: Emu) -> None:
@@ -361,7 +379,10 @@ def route_plan(e: Emu, g, pos, goal, allow: frozenset[str], avoid, exits: frozen
     """Prefer a path that breaks nothing; NPCs move (and some follow Link), so if they wall him in, plan
     without them."""
 
-    under = frozenset(t for t in box_tiles(*pos) if 0 <= t[0] < g.h and 0 <= t[1] < g.w and g.kind[t[0]][t[1]] == "warp")
+    # The warp Link arrived on stays inactive until he steps off it (wEnteredWarpPosition); any other warp
+    # tile would whisk him away, so only that one may be crossed.
+    entered = ram.u8(e, "wEnteredWarpPosition")
+    under = frozenset({(entered >> 4, entered & 15)} if entered != 0xFF else ())
     for a in (allow - BREAKERS, allow):
         for blockers in (nav.blockers(e), ()):
             plan = nav.path(g, pos, goal, a, avoid, blockers, exits, under)
@@ -491,14 +512,15 @@ def approach(e: Emu, obj: ram.Obj, sides: str = "durl", allow: frozenset[str] | 
     ory, orx = obj.rad_y or 6, obj.rad_x or 6
     ry, rx = ory + ly, orx + lx
     oy, ox = obj.y, obj.x
-    # In contact with the object's collision box (Link can't get closer than ry/rx), lined up with it on the
-    # other axis so the A button check hits it.
+    # Next to the object's collision box (Link can't get closer than ry/rx), lined up with it on the other axis
+    # so the A button check hits it. The window is deep enough for the 4px path lattice (whose nodes touching
+    # the box count as blocked) to have a free node in it.
     ay, ax = max(ory - 1, 3), max(orx - 1, 3)
     spots = {
-        "d": (lambda y, x: oy + ry - 3 <= y <= oy + ry + 1 and abs(x - ox) <= ax, "up"),
-        "u": (lambda y, x: oy - ry - 1 <= y <= oy - ry + 3 and abs(x - ox) <= ax, "down"),
-        "l": (lambda y, x: abs(y - oy) <= ay and ox - rx - 1 <= x <= ox - rx + 3, "right"),
-        "r": (lambda y, x: abs(y - oy) <= ay and ox + rx - 3 <= x <= ox + rx + 1, "left"),
+        "d": (lambda y, x: oy + ry - 4 <= y <= oy + ry + 4 and abs(x - ox) <= ax, "up"),
+        "u": (lambda y, x: oy - ry - 4 <= y <= oy - ry + 4 and abs(x - ox) <= ax, "down"),
+        "l": (lambda y, x: abs(y - oy) <= ay and ox - rx - 4 <= x <= ox - rx + 4, "right"),
+        "r": (lambda y, x: abs(y - oy) <= ay and ox + rx - 4 <= x <= ox + rx + 4, "left"),
     }
     errors = []
     for side in sides:
@@ -508,7 +530,7 @@ def approach(e: Emu, obj: ram.Obj, sides: str = "durl", allow: frozenset[str] | 
         except Stuck as err:
             errors.append(f"{side}: {str(err).splitlines()[0]}")
             continue
-        face(e, facing)
+        tap(e, facing, hold=4, after=2)  # face it and close any gap (too short to start pushing)
         return side
     raise Stuck(f"can't reach {obj}: " + "; ".join(errors))
 
@@ -544,9 +566,9 @@ OPPOSITE = {"up": "d", "down": "u", "left": "r", "right": "l"}
 
 
 def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120) -> None:
-    """Push an interaction (e.g. a stone) one step in `direction`."""
+    """Push an interaction (e.g. a stone, a colored cube) sitting on a tile one step in `direction`."""
     obj = find(e, "interaction", obj_id)
-    approach(e, obj, OPPOSITE[direction])
+    walk_to(e, push_spot(obj.y // 16, obj.x // 16, direction), tol=1)  # pushes need Link centered on it
     y0, x0 = obj.y, obj.x
     e.set_buttons(mask_of(direction))
     try:
@@ -554,6 +576,23 @@ def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120) -> N
                    max_frames, f"push {obj_id:02x} {direction}")
     finally:
         e.set_buttons(0)
+
+
+def roll_cube(e: Emu, direction: str, times: int = 1) -> None:
+    """Roll the colored cube (each push turns it over once, changing the color on top)."""
+    for _ in range(times):
+        push_object(e, ram.CONST["INTERAC_COLORED_CUBE"], direction)
+        wait_until(e, ram.controllable, 120, "cube to finish rolling")
+        e.step(20)
+
+
+def ride_cart(e: Emu, max_frames: int = 60 * 60) -> None:
+    """Hop into the minecart in this room and ride it to the end of its track."""
+    cart = find(e, "interaction", ram.CONST["INTERAC_MINECART"])
+    walk_to(e, (cart.y, cart.x), tol=2, stop_on_scene=True)
+    wait_until(e, ram.riding_cart, 60, "getting into the cart")
+    wait_until(e, lambda e: not ram.riding_cart(e), max_frames, "end of the ride")
+    settle(e, quiet=10)
 
 
 def text_done(e: Emu) -> bool:
@@ -605,6 +644,12 @@ INTERAC_PUSHBLOCK = 0x14
 
 # Enemy objects that aren't foes (constants/common/enemies.s).
 NOT_FOES = {ram.CONST["ENEMY_ITEM_DROP_PRODUCER"]}
+# Enemies the sword can't hurt until they've run into Link's shield, by the state they're in while flipped over.
+SHIELD_FOES = {ram.CONST["ENEMY_SPIKED_BEETLE"]: 0x0B}
+
+
+def vulnerable(foe: ram.Obj) -> bool:
+    return foe.id not in SHIELD_FOES or foe.state == SHIELD_FOES[foe.id]
 
 
 def foes_in_room(e: Emu) -> list[ram.Obj]:
@@ -613,13 +658,23 @@ def foes_in_room(e: Emu) -> list[ram.Obj]:
 
 def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None,
           target: Callable[[Emu, list[ram.Obj]], ram.Obj | None] | None = None) -> None:
-    """Attack enemies with the sword until none remain (or `done`). `target` picks which visible foe to go for
-    (default: the nearest)."""
+    """Attack enemies with the sword until none remain (or `done`). Enemies Link can't get to (walled off, over
+    pits) are left alone. `target` picks which visible foe to go for (default: the nearest)."""
     clear_since = [None]
+    g = nav.grid(e)
+    reach = nav.region(nav.clearance(g, abilities(e) - BREAKERS), ram.link_px(e))
+
+    def reachable(o: ram.Obj) -> bool:
+        # Within sword range of somewhere Link can stand.
+        y0, x0 = (int(round(v / nav.STEP) * nav.STEP) for v in (o.y, o.x))
+        return any((y0 + dy, x0 + dx) in reach for dy in range(-16, 17, nav.STEP) for dx in range(-16, 17, nav.STEP))
+
+    def foes(e: Emu) -> list[ram.Obj]:
+        return [o for o in foes_in_room(e) if reachable(o)]
 
     def room_clear(e: Emu) -> bool:
         # Enemies can briefly vanish (Zols splitting into Gels, spawn puffs): require 30 quiet frames.
-        if foes_in_room(e):
+        if foes(e):
             clear_since[0] = None
             return False
         if clear_since[0] is None:
@@ -629,7 +684,7 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
     done = done or room_clear
     start = e.frame
     room = ram.room(e)
-    chase = Chase()
+    chase = Chase({(r, c) for r in range(g.h) for c in range(g.w) if g.kind[r][c] == "warp"})
     last_frame = -1
     while not done(e):
         if e.frame == last_frame:  # every pass must advance the game (walk_to may return at once)
@@ -644,9 +699,12 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
             settle(e)
             continue
         y, x = ram.link_px(e)
-        enemies = foes_in_room(e)
-        foes = [o for o in enemies if o.visible]
-        foe = target(e, foes) if target else min(foes, key=lambda o: abs(o.y - y) + abs(o.x - x), default=None)
+        enemies = foes(e)
+        visible = [o for o in enemies if o.visible]
+        if target:
+            foe = target(e, visible)
+        else:  # nearest, flipped-over beetles first
+            foe = min(visible, key=lambda o: (not vulnerable(o), abs(o.y - y) + abs(o.x - x)), default=None)
         if foe is None:
             if not enemies or target:
                 e.step()
@@ -658,14 +716,19 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
             except Stuck:
                 e.step(8)
             continue
-        chase.attack(e, foe)
+        if vulnerable(foe):
+            chase.attack(e, foe)
+        else:
+            chase.block(e, foe)
 
 
 class Chase:
-    """Close in on an enemy and slash at it, one step per call."""
+    """Close in on an enemy and slash at it, one step per call. Steering straight at it never steps onto
+    `warps` (stairs, holes Link came through): near those it plans a path instead."""
 
-    def __init__(self):
+    def __init__(self, warps: set[tuple[int, int]] = frozenset()):
         self.stall = 0
+        self.warps = warps
 
     def attack(self, e: Emu, foe: ram.Obj) -> None:
         y, x = ram.link_px(e)
@@ -678,10 +741,16 @@ class Chase:
         # walls when that stops making progress.
         spot = min(((foe.y + oy, foe.x + ox) for oy, ox in ((14, 0), (-14, 0), (0, 14), (0, -14))),
                    key=lambda q: abs(q[0] - y) + abs(q[1] - x))
-        e.set_buttons(_mask(steer(spot[0] - y, spot[1] - x)))
-        e.step()
-        e.set_buttons(0)
-        self.stall = self.stall + 1 if ram.link_px(e) == (y, x) else 0
+        sy, sx = spot[0] - y, spot[1] - x
+        # Warps trigger on the tile at Link's (y + 4, x) (code/bank1.s, checkWarpsTopDown).
+        ahead = ((y + 4 + 4 * (sy > 0) - 4 * (sy < 0)) // 16, (x + 4 * (sx > 0) - 4 * (sx < 0)) // 16)
+        if ahead in self.warps:
+            self.stall = 10  # plan around it
+        else:
+            e.set_buttons(_mask(steer(sy, sx)))
+            e.step()
+            e.set_buttons(0)
+            self.stall = self.stall + 1 if ram.link_px(e) == (y, x) else 0
         if self.stall >= 10:
             self.stall = 0
             try:
@@ -689,6 +758,31 @@ class Chase:
                         and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=60)
             except Stuck:
                 e.step(4)
+
+    def block(self, e: Emu, foe: ram.Obj, max_frames: int = 90) -> None:
+        """Line up with `foe` and hold the shield toward it until it charges into it and flips over."""
+        y, x = ram.link_px(e)
+        dy, dx = foe.y - y, foe.x - x
+        if min(abs(dy), abs(dx)) > 6:
+            # Get in line along whichever axis is closer; it charges as soon as Link is centered with it.
+            e.set_buttons(_mask(steer(0, dx) if abs(dx) < abs(dy) else steer(dy, 0)))
+            e.step()
+            e.set_buttons(0)
+            return
+        button = item_button(e, "SHIELD")
+        if button is None:
+            equip(e, "SHIELD", "a")
+            button = "a"
+        face(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
+        e.set_buttons(mask_of(button))
+        try:
+            for _ in range(max_frames):
+                e.step()
+                now = next((o for o in ram.objects(e, "enemy") if o.slot == foe.slot), None)
+                if now is None or vulnerable(now) or not ram.controllable(e):
+                    break
+        finally:
+            e.set_buttons(0)
 
 
 def grab(e: Emu, obj: ram.Obj, max_frames: int = 30) -> None:
@@ -738,7 +832,12 @@ INTERAC_TREASURE = 0x60
 
 
 def pickup(e: Emu, obj_id: int = INTERAC_TREASURE, max_frames: int = 600) -> None:
-    """Walk onto an item lying on the ground (an interaction) and collect it."""
+    """Walk onto an item lying on the ground (an interaction) and collect it, once it has landed (keys fall from
+    the ceiling)."""
+    def landed(e: Emu) -> bool:
+        return any(o.id == obj_id and o.z == 0 for o in ram.objects(e, "interaction"))
+
+    wait_until(e, landed, max_frames, "item to appear and land")
     obj = find(e, "interaction", obj_id)
     walk_to(e, (obj.y, obj.x), tol=3, stop_on_scene=True, max_frames=max_frames)
     settle(e, quiet=30)
@@ -804,6 +903,60 @@ def hold_until(e: Emu, buttons: str, pred: Callable[[Emu], bool], max_frames: in
         wait_until(e, pred, max_frames, what or f"holding {buttons}")
     finally:
         e.set_buttons(0)
+
+
+def side_wait(e: Emu, pred: Callable[[Emu], bool], max_frames: int, what: str) -> None:
+    """Sidescrolling: wait for pred(e) (a moving platform to arrive, the room to be clear...), slashing at
+    enemies that come within reach meanwhile. Turning to face one takes a 1px step, so do this on safe ground."""
+    start = e.frame
+    while not pred(e):
+        if e.frame - start > max_frames:
+            raise Stuck(f"timed out after {max_frames} frames waiting for {what}")
+        y, x = ram.link_px(e)
+        near = [o for o in foes_in_room(e) if o.visible and o.health < 100 and abs(o.y - y) <= 12 and abs(o.x - x) <= 24]
+        if near and ram.controllable(e):
+            d = "right" if near[0].x > x else "left"
+            if ram.u8(e, "w1Link.direction") != DIRECTION_INDEX[d]:
+                tap(e, d, hold=1, after=1)
+            use(e, "SWORD")
+        else:
+            e.step()
+
+
+def side_clear(e: Emu, max_frames: int = 1800) -> None:
+    """Sidescrolling: stand still on safe ground swatting flying enemies (Keese) as they come by, until none are
+    left or time runs out; their bumps are what knocks Link off ledges and platforms."""
+    def clear(e: Emu) -> bool:
+        return not any(o.visible and o.health < 100 for o in foes_in_room(e))
+
+    try:
+        side_wait(e, clear, max_frames, "flying enemies to come by")
+    except Stuck:
+        pass  # some never come close; go ahead anyway
+
+
+def climb(e: Emu, x: int, direction: str, pred: Callable[[Emu], bool], attempts: int = 5,
+          max_frames: int = 300) -> None:
+    """Sidescrolling: line up with the ladder at pixel column `x` and climb `direction` until pred(e). Flying
+    enemies knock Link off ladders, so re-align and try again."""
+    for _ in range(attempts):
+        if pred(e):
+            return
+        lx = ram.link_px(e)[1]
+        if abs(lx - x) > 1:
+            hold_until(e, "right" if lx < x else "left", lambda e: pred(e) or abs(ram.link_px(e)[1] - x) <= 1, 240,
+                       f"to the ladder at x={x}")
+        e.set_buttons(mask_of(direction))
+        try:
+            for _ in range(max_frames):
+                e.step()
+                if pred(e) or abs(ram.link_px(e)[1] - x) > 4:
+                    break
+        finally:
+            e.set_buttons(0)
+        if pred(e):
+            return
+    raise Stuck(f"climb {direction} at x={x}: kept getting knocked off")
 
 
 OPPOSITE_DIR = {"up": "down", "down": "up", "left": "right", "right": "left"}

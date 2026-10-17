@@ -37,3 +37,39 @@ def pumpkin_head(e: Emu, max_frames: int = 20000) -> None:
             chase.attack(e, body)
         else:
             e.step()
+
+
+ENEMY_SWOOP = ram.CONST["ENEMY_SWOOP"]
+
+
+def swoop(e: Emu, spot: tuple[int, int] = (152, 56), max_frames: int = 20000) -> None:
+    """D2 miniboss: it stomps the tile Link stood on when its telegraph counter hit $0a, and stomps break the
+    yellow floor. Wait on the blue border, step one tile along it once the stomp is locked in, then slash it
+    while it's on the ground (object_code/ages/enemies/swoop.s)."""
+    side = (spot[0], spot[1] + 20)
+    start = e.frame
+    while True:
+        boss = next((o for o in ram.objects(e, "enemy") if o.id == ENEMY_SWOOP), None)
+        if boss is None:
+            return
+        if e.frame - start > max_frames:
+            raise act.Stuck("Swoop still alive")
+        if not ram.controllable(e):
+            act.settle(e)
+            continue
+        y, x = ram.link_px(e)
+        sub = ram.field(e, boss, "substate")
+        stomping = boss.state == 0x0B
+        if stomping and sub >= 2 and boss.z == 0 and abs(boss.y - y) + abs(boss.x - x) <= 28:
+            dy, dx = boss.y - y, boss.x - x
+            act.slash(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
+            continue
+        locked = stomping and (sub >= 1 or ram.field(e, boss, "counter1") < 0x0A)
+        goal = side if locked else spot
+        if abs(y - goal[0]) + abs(x - goal[1]) > 2:
+            try:
+                act.walk_to(e, goal, tol=1, max_frames=60)
+            except act.Stuck:
+                e.step()
+        else:
+            e.step()

@@ -148,10 +148,16 @@ def menu_open(e: Emu) -> bool:
     return u8(e, "wOpenedMenuType") != 0
 
 
+def riding_cart(e: Emu) -> bool:
+    """Link is in a minecart (it, not Link, is the object the game moves)."""
+    return u8(e, "wLinkObjectIndex") == 0xD1 and u8(e, "w1Companion.id") == CONST["SPECIALOBJECT_MINECART"]
+
+
 def controllable(e: Emu) -> bool:
     """Link can be moved by the player right now."""
     return (
-        u8(e, "wGameState") == 2
+        not riding_cart(e)
+        and u8(e, "wGameState") == 2
         and u8(e, "wCutsceneIndex") == 1
         and not text_active(e)
         and not menu_open(e)
@@ -181,6 +187,7 @@ class Obj:
     rad_y: int
     rad_x: int
     enabled: int
+    z: int  # height (signed; negative = in the air)
 
     def __str__(self) -> str:
         vis = "" if self.visible else " hidden"
@@ -196,8 +203,14 @@ def objects(e: Emu, kind: str) -> list[Obj]:
         if raw[OBJ["enabled"]]:
             out.append(Obj(kind, page, raw[OBJ["id"]], raw[OBJ["subid"]], raw[OBJ["state"]],
                            raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]], bool(raw[OBJ["visible"]] & 0x80),
-                           raw[OBJ["collisionRadiusY"]], raw[OBJ["collisionRadiusX"]], raw[OBJ["enabled"]]))
+                           raw[OBJ["collisionRadiusY"]], raw[OBJ["collisionRadiusX"]], raw[OBJ["enabled"]],
+                           (raw[OBJ["zh"]] ^ 0x80) - 0x80))
     return out
+
+
+def field(e: Emu, obj: Obj, name: str) -> int:
+    """Any other byte of an object's struct (structs.s), e.g. "substate" or "counter1"."""
+    return e.read((obj.slot << 8) + OBJECT_KINDS[obj.kind] + OBJ[name], 1, bank=1)[0]
 
 
 def summary(e: Emu) -> str:

@@ -6,6 +6,8 @@ import heapq
 import math
 from dataclasses import dataclass, field
 
+from collections import deque
+
 import numpy as np
 
 from . import ram
@@ -189,6 +191,26 @@ class Clearance:
             return all(self.h[q] and self.v[q] for q in (p, n, (n[0], p[1]), (p[0], n[1])))
         grid = self.v if dy else self.h
         return bool(grid[p] and grid[n])
+
+
+def region(cl: Clearance, start: tuple[int, int]) -> set[tuple[int, int]]:
+    """Lattice nodes Link can walk to from `start` (snapped to the nearest free node)."""
+    ok = cl.ok
+    H, W = ok.shape
+    sy, sx = (int(round(v / STEP) * STEP) for v in start)
+    near = sorted((abs(dy) + abs(dx), (sy + dy, sx + dx)) for dy in range(-12, 13, STEP) for dx in range(-12, 13, STEP)
+                  if 0 <= sy + dy < H and 0 <= sx + dx < W and ok[sy + dy, sx + dx])
+    if not near:
+        return set()
+    seen = {near[0][1]}
+    queue = deque(seen)
+    while queue:
+        y, x = queue.popleft()
+        for n in ((y - STEP, x), (y + STEP, x), (y, x - STEP), (y, x + STEP)):
+            if n not in seen and cl.can_move((y, x), n):
+                seen.add(n)
+                queue.append(n)
+    return seen
 
 
 def clearance(g: Grid, allow: frozenset[str] = frozenset(), blockers: list[tuple[int, int, int, int]] = (),
