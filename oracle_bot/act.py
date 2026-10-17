@@ -159,6 +159,9 @@ def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozense
                     direction = strike_at(e, (r, c), "SWORD", SWORD_OFFSETS, allow - BREAKERS)
                 elif how == "shovel":
                     direction = strike_at(e, (r, c), "SHOVEL", SHOVEL_OFFSETS, allow - BREAKERS, after=24)
+                elif how == "bracelet":
+                    direction = lift_at(e, (r, c), allow - BREAKERS)
+                    tap(e, item_button(e, "BRACELET"), hold=2, after=30)  # throw it
                 elif how == "ember":
                     select_seeds(e, "EMBER")
                     direction = strike_at(e, (r, c), "SEED_SATCHEL", SEED_OFFSETS, allow - BREAKERS, after=4,
@@ -317,9 +320,10 @@ def route_plan(e: Emu, g, pos, goal, allow: frozenset[str], avoid, exits: frozen
     """Prefer a path that breaks nothing; NPCs move (and some follow Link), so if they wall him in, plan
     without them."""
 
+    under = frozenset(t for t in box_tiles(*pos) if 0 <= t[0] < g.h and 0 <= t[1] < g.w and g.kind[t[0]][t[1]] == "warp")
     for a in (allow - BREAKERS, allow):
         for blockers in (nav.blockers(e), ()):
-            plan = nav.path(g, pos, goal, a, avoid, blockers, exits)
+            plan = nav.path(g, pos, goal, a, avoid, blockers, exits, under)
             if plan:
                 return plan
     return []
@@ -691,3 +695,46 @@ def hold_until(e: Emu, buttons: str, pred: Callable[[Emu], bool], max_frames: in
         wait_until(e, pred, max_frames, what or f"holding {buttons}")
     finally:
         e.set_buttons(0)
+
+
+OPPOSITE_DIR = {"up": "down", "down": "up", "left": "right", "right": "left"}
+
+
+def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) -> str:
+    """Pick up the pot/rock at metatile `tile` with the bracelet (hold the button, pull back). Link is left
+    holding it; returns the direction he faced."""
+    r, c = tile
+    button = item_button(e, "BRACELET")
+    if button is None:
+        equip(e, "BRACELET", "a")
+        button = "a"
+    before = ram.u8(e, "wRoomLayout", r * 16 + c)
+    g = nav.grid(e)
+    ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
+    y0, x0 = ram.link_px(e)
+    spots = []
+    for d, (oy, ox) in SEED_OFFSETS.items():  # standing right next to the tile, facing it
+        y, x = 16 * r + 8 - oy, 16 * c + 8 - ox
+        for dy in range(-3, 4):
+            for dx in range(-3, 4):
+                yy, xx = (y, x + dx) if d in ("up", "down") else (y + dy, x)
+                if 0 <= yy < ok.shape[0] and 0 <= xx < ok.shape[1] and ok[yy, xx]:
+                    spots.append((abs(yy - y0) + abs(xx - x0) + 4 * (abs(dx) + abs(dy)), d, yy, xx))
+    for _, d, y, x in sorted(set(spots))[:4]:
+        try:
+            walk_to(e, (y, x), allow, tol=0)
+        except Stuck:
+            continue
+        face(e, d)
+        e.set_buttons(mask_of(button))
+        e.step(4)
+        e.set_buttons(mask_of(f"{button}+{OPPOSITE_DIR[d]}"))
+        try:
+            wait_until(e, lambda e: ram.u8(e, "wRoomLayout", r * 16 + c) != before, 60, f"lift {tile}")
+        except Stuck:
+            continue
+        finally:
+            e.set_buttons(0)
+        e.step(16)
+        return d
+    raise Stuck(f"couldn't lift {tile}")

@@ -117,12 +117,15 @@ def grid(e: Emu) -> Grid:
     return g
 
 
-def blocked_pixels(g: Grid, allow: frozenset[str] = frozenset()) -> np.ndarray:
-    """(16h, 16w) bool: pixels Link's box may not overlap."""
+def blocked_pixels(g: Grid, allow: frozenset[str] = frozenset(), unblock: frozenset[tuple[int, int]] = frozenset()) -> np.ndarray:
+    """(16h, 16w) bool: pixels Link's box may not overlap. `unblock`: warp tiles to treat as floor (the one
+    Link arrived on, which won't send him back until he has stepped off it)."""
     px = g.pixel_solid()
     for r in range(g.h):
         for c in range(g.w):
             k = g.kind[r][c]
+            if (r, c) in unblock:
+                continue
             tile = px[16 * r:16 * r + 16, 16 * c:16 * c + 16]
             if k.startswith("hazard:"):
                 tile[:] = k[7:] not in allow
@@ -186,10 +189,11 @@ class Clearance:
         return bool(grid[p] and grid[n])
 
 
-def clearance(g: Grid, allow: frozenset[str] = frozenset(), blockers: list[tuple[int, int, int, int]] = ()) -> Clearance:
+def clearance(g: Grid, allow: frozenset[str] = frozenset(), blockers: list[tuple[int, int, int, int]] = (),
+              unblock: frozenset[tuple[int, int]] = frozenset()) -> Clearance:
     """`blockers` are solid objects (y, x, ry, rx): Link can't get within |dy| < ry and |dx| < rx of them,
     where ry/rx are the sums of both objects' collision radii (preventObjectHFromPassingObjectD)."""
-    px = blocked_pixels(g, allow)
+    px = blocked_pixels(g, allow, unblock)
     c = Clearance(_box_free(px, H_BOX), _box_free(px, V_BOX))
     for by, bx, ry, rx in blockers:
         for m in (c.h, c.v):
@@ -252,11 +256,12 @@ MOVES = ((-STEP, 0), (STEP, 0), (0, -STEP), (0, STEP), (-STEP, -STEP), (-STEP, S
 
 def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozenset(),
          avoid: list[tuple[int, int, int]] = (), blockers: list[tuple[int, int, int, int]] = (),
-         exits: frozenset[str] = frozenset()) -> list[tuple[int, int]] | None:
+         exits: frozenset[str] = frozenset(), unblock: frozenset[tuple[int, int]] = frozenset()
+         ) -> list[tuple[int, int]] | None:
     """A* over Link-center positions on a STEP lattice. `goal(y, x) -> bool` or a (y, x) target.
     `avoid` = [(y, x, radius)] areas with extra cost (enemies); `blockers` = solid NPC centers;
     `exits` = screen edges the path may enter (all others are avoided). Returns lattice waypoints."""
-    cl = clearance(g, allow, blockers)
+    cl = clearance(g, allow, blockers, unblock)
     exclude_edges(cl, exits)
     jumps = ledges(g, cl)
     ok = cl.ok

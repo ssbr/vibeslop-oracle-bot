@@ -187,3 +187,12 @@ with the configured donation, D3-entered room flag `$C966 & $10` clear.
   when sound isn't emulated (white screen after the Capcom logo). Headless ≈ 11k fps, rendered ≈ 5k fps.
   Continuous replay, render on/off and save→load-in-fresh-instance resume are all bit-exact, so states are
   usable for both dev and canonical runs.
+
+## Status (2026-10-17)
+- Route in `route/` runs headless from power-on through the Seed Satchel and Yoll Graveyard to the D1 entrance
+  (`uv run obot run`, ~10 s), with release checkpoints 01_before_maku_path, 02_after_maku_path, 03_before_d1
+  (each boot-checked .sav). `uv run obot verify runs/main/replay.log` passes.
+- D1 (Spirit's Grave) explored interactively up to the Power Bracelet (dev snapshots runs/dev/150_d1 ... 177_d1;
+  room-by-room notes in the session). Not yet written into a route segment.
+- Next: finish bracelet lifting in room 4:1f (lift_at fails at (8,7)), Boss Key, Pumpkin Head (human or scripted),
+  write route/s04_d1.py; then D1->D2 (child naming, fairies, harp, bombs), D2, Crescent Island.
