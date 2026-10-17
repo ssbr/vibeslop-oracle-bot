@@ -105,6 +105,12 @@ def room_flag(e: Emu, group: int, rm: int, mask: int) -> bool:
     return bool(room_flags(e, group, rm) & mask)
 
 
+def vine_position(e: Emu, vine: int) -> int:
+    """Where vine sprout `vine` (its subid) stands, as a short position $YX in its past room: four of the past
+    room-flag bytes are borrowed for this (wVinePositions in include/wram.s)."""
+    return room_flags(e, 1, 0xF0 + vine)
+
+
 def essences(e: Emu) -> int:
     return bin(u8(e, "wEssencesObtained")).count("1")
 

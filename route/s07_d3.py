@@ -1,6 +1,6 @@
 """D2 -> D3: the doctor money for Bipin & Blossom's baby; Moosh, Cheval's grave (flippers, Cheval Rope); Rafton,
-Ricky's gloves, Tingle's chart, Rafton's raft to Crescent Island; then (to be continued) the Tokay item hunt,
-Wild Tokay."""
+Ricky's gloves, Tingle's chart, Rafton's raft to Crescent Island; the Tokay item hunt (to be continued), Wild
+Tokay."""
 
 from oracle_bot import act, cheats, ram
 from oracle_bot.config import DONATIONS
@@ -143,7 +143,7 @@ def island_chart(e):
     act.exit_room(e, "left")
     act.walk_to(e, (88, 128), tol=2)
     ricky_hop(e, "up", lambda y, x: y < 44)
-    act.exit_room(e, "down")
+    act.exit_room(e, "down", span=(80, 96))  # down the gully (column 5), not back off the cliff
     act.walk_to(e, (24, 72), tol=2)
     ricky_hop(e, "left", lambda y, x: x < 44)
     act.exit_room(e, "up")
@@ -182,3 +182,43 @@ def raft_to_crescent(e):
     act.exit_room(e, "up")
     act.exit_room(e, "up")
     act.settle(e, quiet=60)
+
+
+TOKAY = ram.CONST["INTERAC_TOKAY"]
+SPROUT = ram.CONST["ENEMY_VINE_SPROUT"]
+
+
+@R.step(done=lambda e: ram.has(e, "SHOVEL"), note="1:cb: the Tokay south of the landing has the shovel")
+def crescent_shovel(e):
+    act.travel_to(e, 0xCB)
+    act.talk(e, TOKAY, 0x07, quiet=30)
+
+
+@R.step(done=lambda e: ram.has(e, "SWORD"),
+        note="cave 5:ca under 1:bb's north-west corner: push the top-right mound aside and dig down to the Tokay "
+        "with the sword (the lower mound would wall his pocket off)")
+def crescent_sword(e):
+    act.travel_to(e, 0xBB)
+    act.enter(e, (0, 1), "up")
+    act.push_tile(e, (2, 10), "left")
+    act.talk(e, TOKAY, 0x06, sides="rd", quiet=30)
+    act.exit_room(e, "down")
+
+
+# Vine sprouts (enemy subids) that must stand where the present's vines up to the Scent Tree grow:
+# (sprout, past room, target $YX, pushes). The third (4, in 1:da) starts in place.
+VINES = [(2, 0xBA, 0x18, [("right", 2)]), (3, 0xCC, 0x11, [("up", 2), ("left", 4)])]
+
+
+@R.step(done=lambda e: all(ram.vine_position(e, v) == pos for v, _, pos, _ in VINES),
+        note="push the vine sprouts where the present's vines need them (code/ages/roomSpecificTileChanges.s)")
+def vine_sprouts(e):
+    for vine, room, pos, pushes in VINES:
+        if ram.vine_position(e, vine) == pos:
+            continue
+        act.travel_to(e, room)
+        for direction, times in pushes:
+            for _ in range(times):
+                act.push_object(e, SPROUT, direction, kind="enemy")
+                act.wait_until(e, lambda e: (lambda o: o.y % 16 == 8 and o.x % 16 == 8)(act.find(e, "enemy", SPROUT)),
+                               60, "the sprout to finish sliding")

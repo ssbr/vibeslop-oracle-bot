@@ -85,7 +85,8 @@ def cross_2a_west(e):
     onto the floor too), under the Thwomp, platform 8 up to the left ledge, out west."""
     act.side_wait(e, lambda e: platform(e, 9).y <= 73, 400, "platform 9 up")
     act.hold_until(e, "down", lambda e: on_ground(e) and link_y(e) >= 57, max_frames=200, what="down the ladder")
-    act.wait_until(e, lambda e: on_ground(e) and link_y(e) == 137, 400, "down to the floor")
+    # (if platform 9 left while Link was on the ladder, it's another ~310-frame round trip)
+    act.wait_until(e, lambda e: on_ground(e) and link_y(e) >= 136, 800, "down to the floor (or platform 9 at it)")
     act.hold_until(e, "left", lambda e: link_x(e) <= 100, max_frames=300, what="under the Thwomp")
     act.side_wait(e, lambda e: platform(e, 8).y >= 151, 400, "platform 8 down")
     act.hold_until(e, "left", lambda e: link_x(e) <= 90, what="onto platform 8")

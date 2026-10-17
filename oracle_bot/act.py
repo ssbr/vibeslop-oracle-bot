@@ -679,9 +679,10 @@ def play_until(e: Emu, pred: Callable[[Emu], bool], max_frames: int = 60 * 60 * 
 OPPOSITE = {"up": "d", "down": "u", "left": "r", "right": "l"}
 
 
-def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120) -> None:
-    """Push an interaction (e.g. a stone, a colored cube) sitting on a tile one step in `direction`."""
-    obj = find(e, "interaction", obj_id)
+def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120, kind: str = "interaction") -> None:
+    """Push an object (a stone, a colored cube, a vine sprout enemy...) sitting on a tile one step in
+    `direction`."""
+    obj = find(e, kind, obj_id)
     try:  # tile-bound pushables (colored cubes) need Link centered on them
         walk_to(e, push_spot(obj.y // 16, obj.x // 16, direction), tol=1)
     except Stuck:  # free-standing ones (the intro's stone) just need contact
@@ -689,7 +690,7 @@ def push_object(e: Emu, obj_id: int, direction: str, max_frames: int = 120) -> N
     y0, x0 = obj.y, obj.x
     e.set_buttons(mask_of(direction))
     try:
-        wait_until(e, lambda e: (lambda o: abs(o.y - y0) + abs(o.x - x0) >= 12)(find(e, "interaction", obj_id)),
+        wait_until(e, lambda e: (lambda o: abs(o.y - y0) + abs(o.x - x0) >= 12)(find(e, kind, obj_id)),
                    max_frames, f"push {obj_id:02x} {direction}")
     finally:
         e.set_buttons(0)
