@@ -96,6 +96,8 @@ def grid(e: Emu) -> Grid:
                 k = "hazard:" + ttype.lower()
             elif t in cliffs:
                 k = "cliff:" + "urdl"[cliffs[t] // 8]
+            elif t in inter and v and inter[t] & 15 in (4, 5):  # chests and signs (A reads/opens them)
+                k = "interact:" + str(inter[t] & 15)
             elif t in breakable and v:
                 k = "break:" + ",".join(map(str, breakable[t]))
             elif t in inter and v:
@@ -143,7 +145,7 @@ def break_sources(kind: str) -> set[int]:
 def breaker(kind: str, allow: frozenset[str]) -> str | None:
     """The allowed ability that breaks this breakable tile kind, if any (sword preferred)."""
     sources = break_sources(kind)
-    for ability in ("sword", "sword2", "shovel", "ember", "bracelet"):
+    for ability in ("sword", "sword2", "shovel", "bracelet", "ember", "bombs"):
         if ability in allow and BREAK_SOURCES[ability] & sources:
             return ability
     return None

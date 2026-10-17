@@ -192,7 +192,7 @@ def objects(e: Emu, kind: str) -> list[Obj]:
     out = []
     for page in range(0xD0, 0xE0):
         base = (page << 8) + off
-        raw = e.read(base, 0x40, bank=1)
+        raw = e.read(base, 0x30, bank=1)  # (a slice ending at $E000 trips PyBoy's bank check)
         if raw[OBJ["enabled"]]:
             out.append(Obj(kind, page, raw[OBJ["id"]], raw[OBJ["subid"]], raw[OBJ["state"]],
                            raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]], bool(raw[OBJ["visible"]] & 0x80),

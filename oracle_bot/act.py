@@ -134,6 +134,13 @@ def slash(e: Emu, direction: str) -> None:
     use(e, "SWORD", direction)
 
 
+def play_harp(e: Emu) -> None:
+    """Play the Harp's current tune and wait for the song to finish (it freezes everything but Link, who
+    can't move until it ends)."""
+    use(e, "HARP")
+    wait_until(e, lambda e: ram.u8(e, "wDisabledObjects") == 0 and ram.controllable(e), 600, "harp song")
+
+
 def box_tiles(y: int, x: int) -> set[tuple[int, int]]:
     """Metatiles overlapped by Link's tile-collision box at (y, x)."""
 
@@ -155,19 +162,7 @@ def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozense
             how = nav.breaker(g.kind[r][c], allow)
             before = ram.read(e, "wRoomLayout", 0xC0)
             try:
-                if how in ("sword", "sword2"):
-                    direction = strike_at(e, (r, c), "SWORD", SWORD_OFFSETS, allow - BREAKERS)
-                elif how == "shovel":
-                    direction = strike_at(e, (r, c), "SHOVEL", SHOVEL_OFFSETS, allow - BREAKERS, after=24)
-                elif how == "bracelet":
-                    direction = lift_at(e, (r, c), allow - BREAKERS)
-                    tap(e, item_button(e, "BRACELET"), hold=2, after=30)  # throw it
-                elif how == "ember":
-                    select_seeds(e, "EMBER")
-                    direction = strike_at(e, (r, c), "SEED_SATCHEL", SEED_OFFSETS, allow - BREAKERS, after=4,
-                                          wait=wait_seeds_done)
-                else:
-                    raise Stuck(f"breaking tiles with {how} isn't implemented")
+                direction = hit_tile(e, (r, c), how, allow)
             except Stuck as err:
                 errors.append(f"{(r, c)}: {str(err).splitlines()[0]}")
                 continue
@@ -188,6 +183,8 @@ SHOVEL_OFFSETS = {"up": (-8, 0), "right": (4, 6), "down": (7, 0), "left": (4, -7
 SWORD_OFFSETS = {"up": (-14, 0), "right": (0, 13), "down": (13, 0), "left": (0, -14)}
 # A satchel seed is thrown forward and bursts on whatever it hits: standing right next to a tile works.
 SEED_OFFSETS = {"up": (-12, 0), "right": (0, 10), "down": (11, 0), "left": (0, -11)}
+# A bomb is set down at Link's feet; its blast breaks tiles 12-13px away (items/bombs.s, explosion offsets).
+BOMB_OFFSETS = {"up": (-12, 0), "right": (0, 12), "down": (12, 0), "left": (0, -12)}
 SEEDS = ("EMBER", "SCENT", "PEGASUS", "GALE", "MYSTERY")
 
 
@@ -224,6 +221,7 @@ def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple
         except Stuck as err:
             errors.append(f"{d}: {str(err).splitlines()[0]}")
             continue
+        settle(e)  # a text box (telepathy, NPC) may have popped up on the way
         use(e, item, d, after=after)
         if wait:
             wait(e)
@@ -234,7 +232,29 @@ def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple
     raise Stuck(f"couldn't hit {tile} with {item}: {errors}")
 
 
-BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel", "ember"})
+BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel", "ember", "bombs"})
+MAX_SCENE_FRAMES = 60 * 60 * 5
+
+
+def hit_tile(e: Emu, tile: tuple[int, int], how: str, allow: frozenset[str]) -> str:
+    """Break metatile `tile` with ability `how` (as chosen by nav.breaker); returns the direction Link faced."""
+    rest = allow - BREAKERS  # walking to the spot mustn't break anything else
+    if how in ("sword", "sword2"):
+        return strike_at(e, tile, "SWORD", SWORD_OFFSETS, rest)
+    if how == "shovel":
+        return strike_at(e, tile, "SHOVEL", SHOVEL_OFFSETS, rest, after=24)
+    if how == "bracelet":
+        direction = lift_at(e, tile, rest)
+        settle(e)
+        if holding(e):
+            tap(e, item_button(e, "BRACELET"), hold=2, after=30)  # throw it
+        return direction
+    if how == "ember":
+        select_seeds(e, "EMBER")
+        return strike_at(e, tile, "SEED_SATCHEL", SEED_OFFSETS, rest, after=4, wait=wait_seeds_done)
+    if how == "bombs":
+        return strike_at(e, tile, "BOMB", BOMB_OFFSETS, rest, after=10, wait=set_bomb_down)
+    raise Stuck(f"can't break {tile} with {how}")
 
 
 def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max_frames: int = 1800,
@@ -254,20 +274,30 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
     anchor, anchor_frame = None, e.frame
     replans = 0
     no_path_waits = 0
+    fought = False
+    scene_frames = 0
     try:
         while True:
             if e.frame > deadline:
                 raise Stuck(f"walk_to {goal}: out of time at {ram.link_px(e)}")
+            if leave_ok and (ram.room(e) != start_room or ram.u8(e, "wScrollMode") & 0x08):
+                return  # left the screen (the scrambled woods can lead back to the same room)
             if not ram.controllable(e):
                 e.set_buttons(0)
                 if stop_on_scene:
                     return
                 if ram.text_active(e) and not settle_text:
                     raise Stuck("walk_to: text appeared")
+                t0 = e.frame
                 if ram.text_active(e):
                     settle(e)
                 else:
                     e.step()
+                # Scenes (text, escorts) don't use up walking time, but they mustn't go on forever.
+                deadline += e.frame - t0
+                scene_frames += e.frame - t0
+                if scene_frames > MAX_SCENE_FRAMES:
+                    raise Stuck(f"walk_to: Link not controllable for {scene_frames} frames\n{ram.summary(e)}")
                 continue
             if ram.room(e) != start_room:
                 if leave_ok:
@@ -283,7 +313,18 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
                 g = nav.grid(e)
                 avoid = [(o.y, o.x, 12) for o in ram.objects(e, "enemy")]
                 plan = route_plan(e, g, pos, goal, allow, avoid, exits)
-                if plan and allow & BREAKERS and break_first_obstacle(e, g, plan, allow):
+                try:
+                    broke = bool(plan and allow & BREAKERS and break_first_obstacle(e, g, plan, allow))
+                except Stuck:
+                    # Enemies knocking Link around spoil lifting/cutting: clear the room once, then retry.
+                    if fought or not foes_in_room(e):
+                        raise
+                    fought = True
+                    fight(e, max_frames=1800)
+                    plan = []
+                    deadline = e.frame + max_frames
+                    continue
+                if broke:
                     plan = []
                     deadline = e.frame + max_frames  # breaking something is progress
                     continue
@@ -347,11 +388,15 @@ def exit_room(e: Emu, direction: str, allow: frozenset[str] | None = None, expec
         return edge(y, x) and lo <= (y, x)[along] <= hi
 
     before = ram.room(e)
+
+    def left(e: Emu) -> bool:
+        return ram.room(e) != before or bool(ram.u8(e, "wScrollMode") & 0x08)
+
     walk_to(e, near, allow, max_frames=max_frames, leave_ok=True, exits=frozenset({direction}))
-    if ram.room(e) == before:
+    if not left(e):
         e.set_buttons(mask_of(direction))
         try:
-            wait_until(e, lambda e: ram.room(e) != before, 120, f"room change going {direction}")
+            wait_until(e, left, 120, f"room change going {direction}")
         finally:
             e.set_buttons(0)
     settle(e)
@@ -359,17 +404,27 @@ def exit_room(e: Emu, direction: str, allow: frozenset[str] | None = None, expec
         raise Stuck(f"exit {direction}: expected room {expect}, got {ram.room(e)}")
 
 
-def travel_to(e: Emu, room: int, allow: frozenset[str] | None = None) -> None:
-    """Walk across overworld screens to `room` (same group), routing over the surveyed room graph."""
-
+def travel_to(e: Emu, room: int, at: tuple[int, int] | None = None, allow: frozenset[str] | None = None,
+              max_replans: int = 5) -> None:
+    """Walk across overworld screens to `room` (same group), routing over the surveyed room graph; with `at`, to
+    the part of the room that pixel is in. If Link ends up somewhere unexpected (knockback over an edge,
+    scrambled woods), it re-plans from there."""
     allow = abilities(e) if allow is None else allow
-    hops = world.plan_to(e, room, allow)
-    for i, (direction, lo, hi) in enumerate(hops):
-        group, rm = ram.room(e)
-        if direction == "ledge":
-            # Jump down into component `lo` of this room: walk toward the next exit; the planner takes the ledge.
-            continue
-        exit_room(e, direction, allow, expect=(group, rm + world.DELTA[direction]), span=(lo, hi))
+    for attempt in range(max_replans + 2):
+        # Ledge hops need no action: walking toward the next exit (or the caller's target) takes the ledge.
+        hops = [h for h in world.plan_to(e, room, allow, at) if h[0] != "ledge"]
+        if not hops or attempt > max_replans:
+            break
+        for direction, lo, hi, dest in hops:
+            group, rm = ram.room(e)
+            try:
+                exit_room(e, direction, allow, expect=(group, dest), span=(lo, hi))
+            except Stuck as err:
+                if not str(err).startswith("exit "):
+                    raise
+                break  # wrong room: re-plan from here
+    if hops:
+        raise Stuck(f"travel_to {room:02x}: still in {ram.room(e)} after {max_replans} re-plans")
 
 
 def travel(e: Emu, *hops: int | str, allow: frozenset[str] | None = None) -> None:
@@ -394,14 +449,25 @@ def enter(e: Emu, tile: tuple[int, int], direction: str = "up", max_frames: int 
     # Stand on the tile before the door, centered on the door's axis.
     ty, tx = (r - dy) * 16 + 8 - 2, (c - dx) * 16 + 8
     before = ram.room(e)
-    walk_to(e, lambda y, x: abs(y - ty) <= 4 and abs(x - tx) <= 2 if dy else abs(y - ty) <= 2 and abs(x - tx) <= 4,
-            leave_ok=True)
-    if ram.room(e) == before:
-        e.set_buttons(mask_of(direction))
-        try:
-            wait_until(e, lambda e: ram.room(e) != before, max_frames, f"warp at {tile}")
-        finally:
-            e.set_buttons(0)
+    for attempt in range(3):
+        walk_to(e, lambda y, x: abs(y - ty) <= 4 and abs(x - tx) <= 2 if dy else abs(y - ty) <= 2 and abs(x - tx) <= 4,
+                leave_ok=True)
+        if ram.room(e) == before:
+            e.set_buttons(mask_of(direction))
+            try:
+                wait_until(e, lambda e: ram.room(e) != before, max_frames, f"warp at {tile}")
+            except Stuck:
+                # An enemy in the way knocks Link off course: clear the room and try again.
+                if attempt == 2 or not foes_in_room(e):
+                    raise
+                e.set_buttons(0)
+                fight(e)
+                if ram.room(e) != before:
+                    break
+                continue
+            finally:
+                e.set_buttons(0)
+        break
     settle(e)
 
 
@@ -562,12 +628,16 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
 
     done = done or room_clear
     start = e.frame
+    room = ram.room(e)
     chase = Chase()
     last_frame = -1
     while not done(e):
         if e.frame == last_frame:  # every pass must advance the game (walk_to may return at once)
             e.step()
         last_frame = e.frame
+        if ram.room(e) != room:  # chased an enemy over a warp or edge: this room's fight is over
+            settle(e)
+            return
         if e.frame - start > max_frames:
             raise Stuck(f"fight: enemies remain after {max_frames} frames: {ram.objects(e, 'enemy')}")
         if not ram.controllable(e):
@@ -681,6 +751,14 @@ def burn(e: Emu, tile: tuple[int, int]) -> None:
     settle(e)
 
 
+def set_bomb_down(e: Emu) -> None:
+    """Using a bomb only lifts it overhead, where its blast breaks nothing: a second press sets it down. Then
+    wait for it to go off."""
+    tap(e, item_button(e, "BOMB"), hold=2, after=2)
+    wait_until(e, lambda e: not any(o.id == ram.CONST["ITEM_BOMB"] for o in ram.objects(e, "item")), 300,
+               "bomb to explode")
+
+
 def wait_seeds_done(e: Emu, max_frames: int = 300) -> None:
     """Wait until no seed items (ITEM_EMBER_SEED..ITEM_MYSTERY_SEED) are active: embers break tiles when
     they finish burning."""
@@ -756,6 +834,7 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
             walk_to(e, (y, x), allow, tol=0)
         except Stuck:
             continue
+        settle(e)
         face(e, d)
         e.set_buttons(mask_of(button))
         e.step(4)
@@ -768,11 +847,24 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
         finally:
             e.set_buttons(0)
         e.step(4)
-        if holding(e):
-            return d
+        if holding(e) or ram.u8(e, "wRoomLayout", r * 16 + c) != before:
+            return d  # (an event the lift triggers can cut the lift animation short)
     raise Stuck(f"couldn't lift {tile}")
 
 
 def holding(e: Emu) -> bool:
-    """Link is carrying something over his head (the bracelet's held-object item, subid $10)."""
-    return any(o.id == ram.CONST["ITEM_BRACELET"] and o.subid & 0x10 for o in ram.objects(e, "item"))
+    """Link is carrying something over his head (which also stops doors and stairs from working)."""
+    return ram.u8(e, "wLinkGrabState") == 0x83
+
+
+def break_tile(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) -> None:
+    """Remove the bush/rock/pot/cracked wall at metatile `tile` with whatever Link can break it with (bombs
+    too: unlike walking, which never spends them)."""
+    if allow is None:
+        allow = abilities(e) | ({"bombs"} if ram.has(e, "BOMBS") else set())
+    r, c = tile
+    kind = nav.grid(e).kind[r][c]
+    how = nav.breaker(kind, allow) if kind.startswith("break:") else None
+    if how is None:
+        raise Stuck(f"can't break {tile} ({kind}) with {sorted(allow)}")
+    hit_tile(e, tile, how, allow)

@@ -189,10 +189,13 @@ with the configured donation, D3-entered room flag `$C966 & $10` clear.
   usable for both dev and canonical runs.
 
 ## Status (2026-10-17)
-- Route in `route/` runs headless from power-on through the Seed Satchel and Yoll Graveyard to the D1 entrance
-  (`uv run obot run`, ~10 s), with release checkpoints 01_before_maku_path, 02_after_maku_path, 03_before_d1
-  (each boot-checked .sav). `uv run obot verify runs/main/replay.log` passes.
-- D1 (Spirit's Grave) explored interactively up to the Power Bracelet (dev snapshots runs/dev/150_d1 ... 177_d1;
-  room-by-room notes in the session). Not yet written into a route segment.
-- Next: finish bracelet lifting in room 4:1f (lift_at fails at (8,7)), Boss Key, Pumpkin Head (human or scripted),
-  write route/s04_d1.py; then D1->D2 (child naming, fairies, harp, bombs), D2, Crescent Island.
+- Route in `route/` runs headless from power-on to the bombed-open D2 entrance (`uv run obot run`), with release
+  checkpoints 01_before_maku_path, 02_after_maku_path, 03_before_d1, 04_after_d1, 05_before_d2 (each boot-checked
+  .sav). `uv run obot verify runs/main/replay.log` passes.
+- s05 (D1 -> D2): fairy hide-and-seek, D2 present entrance collapse, child named (config child_name), Harp + Tune
+  of Echoes, portal, Mystery Seeds via the Deku Forest caves, Wooden Shield (scrub, 10 rupees), Ambi's bombs.
+- Findings: bombs are lifted overhead when used (a second press sets them down; the blast only breaks tiles at
+  ground level); stairs/doors don't warp while Link carries something (wLinkGrabState $83); the Mystery Seed escort
+  can start in the forest (soldier subid $0a) as well as at the palace gate.
+- Next: D2 (Wing Dungeon: Spiked Beetles need the shield, sidescroll rooms, mine carts, Swoop, Roc's Feather, Head
+  Thwomp with bombs) -> 06_after_d2, the doctor donation, then D2 -> D3 (Crescent Island).
