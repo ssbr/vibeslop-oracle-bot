@@ -44,6 +44,8 @@ def settle(e: Emu, choices: Sequence[int] = (), max_frames: int = 60 * 60 * 5, q
     start = e.frame
     calm = 0
     while calm < quiet:
+        if ram.u8(e, "wLinkDeathTrigger") or ram.u8(e, "w1Link.state") == ram.CONST["LINK_STATE_DYING"]:
+            raise Stuck("Link died")
         if ram.controllable(e):
             calm += 1
             e.step()
@@ -200,6 +202,7 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
     # Stall detection: Link can jitter in place against an NPC, so compare against where he was a while ago.
     anchor, anchor_frame = None, e.frame
     replans = 0
+    no_path_waits = 0
     try:
         while True:
             if e.frame > deadline:
@@ -234,6 +237,11 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
                     deadline = e.frame + max_frames  # breaking something is progress
                     continue
                 if not plan:
+                    # Doors may still be opening (or NPCs moving): give the room a moment before giving up.
+                    if no_path_waits < 4:
+                        no_path_waits += 1
+                        e.step(30)
+                        continue
                     raise Stuck(f"walk_to: no path from {pos} to {goal}\n{nav.ascii(e, g)}")
                 if stalled:
                     replans += 1
@@ -428,11 +436,105 @@ def text_done(e: Emu) -> bool:
 
 
 def choose_option(e: Emu, index: int) -> None:
+    """Answer the open option prompt (0 = first option, e.g. Yes)."""
+    # The prompt ignores input until it's fully shown, which is when the cursor gets a position.
+    wait_until(e, lambda e: ram.u8(e, "w7SelectedTextPosition") != 0, 600, "option prompt to be ready")
     for _ in range(8):
-        cur = ram.u8(e, "wSelectedTextOption")
+        cur = ram.u8(e, "w7SelectedTextOption")
         if cur == index:
             break
-        tap(e, "right" if cur < index else "left", hold=1, after=4)
+        tap(e, "right" if cur < index else "left", hold=2, after=8)
     else:
         raise Stuck(f"could not select option {index}")
-    tap(e, "a", hold=1, after=4)
+    tap(e, "a", hold=2, after=8)
+
+
+# Where Link stands to push a block at metatile (r, c) in each direction: touching it, centered on it.
+def push_spot(r: int, c: int, direction: str) -> tuple[int, int]:
+    return {"up": (16 * r + 18, 16 * c + 8), "down": (16 * r - 7, 16 * c + 8),
+            "right": (16 * r + 5, 16 * c - 4), "left": (16 * r + 5, 16 * c + 20)}[direction]
+
+
+def push_tile(e: Emu, tile: tuple[int, int], direction: str, max_frames: int = 90) -> None:
+    """Push the block at metatile `tile` one step in `direction` and wait for it to land."""
+    r, c = tile
+    walk_to(e, push_spot(r, c, direction), tol=1)
+
+    def sliding(e: Emu) -> bool:
+        return any(o.id == INTERAC_PUSHBLOCK for o in ram.objects(e, "interaction"))
+
+    # The block becomes an INTERAC_PUSHBLOCK while it slides; keep pushing until it has landed (letting go
+    # early cancels the push).
+    e.set_buttons(mask_of(direction))
+    try:
+        wait_until(e, sliding, max_frames, f"block at {tile} to move {direction}")
+        wait_until(e, lambda e: not sliding(e), 120, f"block from {tile} to land")
+    finally:
+        e.set_buttons(0)
+    settle(e)
+
+
+INTERAC_PUSHBLOCK = 0x14
+
+
+def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None) -> None:
+    """Attack the nearest enemy with the sword until none remain (or `done`)."""
+    done = done or (lambda e: not [o for o in ram.objects(e, "enemy") if o.visible])
+    start = e.frame
+    while not done(e):
+        if e.frame - start > max_frames:
+            raise Stuck(f"fight: enemies remain after {max_frames} frames: {ram.objects(e, 'enemy')}")
+        if not ram.controllable(e):
+            settle(e)
+            continue
+        y, x = ram.link_px(e)
+        foes = [o for o in ram.objects(e, "enemy") if o.visible]
+        if not foes:
+            e.step()
+            continue
+        foe = min(foes, key=lambda o: abs(o.y - y) + abs(o.x - x))
+        dy, dx = foe.y - y, foe.x - x
+        if abs(dy) + abs(dx) <= 18 and min(abs(dy), abs(dx)) <= 8:
+            slash(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
+            continue
+        # Line up with the enemy on whichever axis is closer, then close in.
+        try:
+            walk_to(e, lambda py, px, foe=foe: abs(py - foe.y) + abs(px - foe.x) <= 16
+                    and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=40)
+        except Stuck:
+            e.step(4)
+
+
+def open_chest(e: Emu, tile: tuple[int, int], max_frames: int = 600) -> None:
+    """Open the chest at metatile `tile` from below and collect its contents."""
+    r, c = tile
+    before = ram.read(e, "wRoomLayout", 0xC0)[r * 16 + c]
+    walk_to(e, (16 * r + 18, 16 * c + 8), tol=1)
+    face(e, "up")
+    tap(e, "a", hold=2, after=10)
+    wait_until(e, lambda e: ram.read(e, "wRoomLayout", 0xC0)[r * 16 + c] != before or ram.text_active(e),
+               max_frames, f"chest at {tile} to open")
+    settle(e, quiet=30)
+
+
+def unlock(e: Emu, tile: tuple[int, int], direction: str, max_frames: int = 120) -> None:
+    """Walk into the key door / key block at `tile` (moving `direction`) until it opens."""
+    r, c = tile
+    before = ram.u8(e, "wRoomLayout", r * 16 + c)
+    walk_to(e, push_spot(r, c, direction), tol=1)
+    e.set_buttons(mask_of(direction))
+    try:
+        wait_until(e, lambda e: ram.u8(e, "wRoomLayout", r * 16 + c) != before, max_frames, f"door at {tile} to open")
+    finally:
+        e.set_buttons(0)
+    settle(e, quiet=20)
+
+
+INTERAC_TREASURE = 0x60
+
+
+def pickup(e: Emu, obj_id: int = INTERAC_TREASURE, max_frames: int = 600) -> None:
+    """Walk onto an item lying on the ground (an interaction) and collect it."""
+    obj = find(e, "interaction", obj_id)
+    walk_to(e, (obj.y, obj.x), tol=3, stop_on_scene=True, max_frames=max_frames)
+    settle(e, quiet=30)

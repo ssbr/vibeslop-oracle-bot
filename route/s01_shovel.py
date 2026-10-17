@@ -50,7 +50,3 @@ def to_maku_road(e):
 
 R.mark("01_before_maku_path", release=True, expect=lambda e: ram.room(e) == (1, 0x48))
 
-
-@R.step(done=lambda e: ram.dungeon(e) == 0x0D)
-def enter_maku_road(e):
-    act.enter(e, (2, 1), "up")

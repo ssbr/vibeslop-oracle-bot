@@ -17,8 +17,15 @@ def save(e: Emu, name: str) -> Path:
     return DEV / name
 
 
-def load(name: str) -> Emu:
-    return load_snapshot(DEV / name)
+def load(name: str, cheat: bool = True) -> Emu:
+    """Load a dev snapshot (from runs/dev, or a path to a run's state). Cheats are attached like in real runs."""
+    from . import cheats
+
+    path = Path(name)
+    e = load_snapshot(path.with_suffix("") if path.suffix == ".state" or path.parent != Path(".") else DEV / name)
+    if cheat:
+        e.before_frame.append(cheats.Cheats())
+    return e
 
 
 def inspect(e: Emu, png: str | Path | None = "runs/dev/inspect.png", scale: int = 2) -> str:
@@ -37,3 +44,22 @@ def sheet(frames: list, path: str | Path, cols: int = 4) -> None:
     for i, im in enumerate(imgs):
         out.paste(im, ((i % cols) * 160, (i // cols) * 144))
     out.save(ROOT / path)
+
+
+def render_room(e: Emu, path: str | Path, scale: int = 2) -> None:
+    """Whole-room image (large rooms are bigger than the screen): pans the camera in a scratch copy."""
+    import numpy as np
+
+    st = (e.state(), e.frame, len(e.log.ops))
+    large = ram.u8(e, "wRoomIsLarge")
+    H, W = (176, 240) if large else (128, 160)
+    full = np.zeros((H, W, 3), np.uint8)
+    for cy, cx in {(0, 0), (0, W - 160), (H - 128, 0), (H - 128, W - 160)}:
+        e.load(*st)
+        for _ in range(3):
+            e.poke(0xFFAA, cy, None, "dev")
+            e.poke(0xFFAC, cx, None, "dev")
+            e.step(1, render=True)
+        full[cy:cy + 128, cx:cx + 160] = e.screen()[16:144]
+    e.load(*st)
+    Image.fromarray(full).resize((W * scale, H * scale), Image.NEAREST).save(ROOT / path)

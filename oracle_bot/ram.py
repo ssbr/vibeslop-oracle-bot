@@ -133,7 +133,7 @@ def text_active(e: Emu) -> bool:
 def text_index(e: Emu) -> int:
     """Index of the most recently shown text (group << 8 | index), as in the TX_xxxx names."""
     lo, hi = read(e, "wTextIndex", 2)
-    return hi << 8 | lo
+    return ((hi - 4) & 0xFF) << 8 | lo  # stored with $400 added (one per text dictionary)
 
 
 def text(e: Emu) -> str:
