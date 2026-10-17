@@ -1121,10 +1121,21 @@ def side_clear(e: Emu, max_frames: int = 1800) -> None:
 def climb(e: Emu, x: int, direction: str, pred: Callable[[Emu], bool], attempts: int = 5,
           max_frames: int = 300) -> None:
     """Sidescrolling: line up with the ladder at pixel column `x` and climb `direction` until pred(e). Flying
-    enemies knock Link off ladders, so re-align and try again."""
+    enemies knock Link off ladders: going up, wait at the foot (swatting) until none is close to it; after a
+    knock, re-align and try again."""
+    def ladder_clear(e: Emu) -> bool:
+        y = ram.link_px(e)[0]
+        return not any(o.visible and o.health < 100 and abs(o.x - x) <= 32 and abs(o.y - y) <= 64
+                       for o in foes_in_room(e))
+
     for _ in range(attempts):
         if pred(e):
             return
+        if direction == "up":
+            try:
+                side_wait(e, ladder_clear, 600, "flyers to leave the ladder")
+            except Stuck:
+                pass  # go anyway
         lx = ram.link_px(e)[1]
         if abs(lx - x) > 1:
             hold_until(e, "right" if lx < x else "left", lambda e: pred(e) or abs(ram.link_px(e)[1] - x) <= 1, 240,

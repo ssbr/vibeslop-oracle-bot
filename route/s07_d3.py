@@ -1,5 +1,6 @@
 """D2 -> D3: the doctor money for Bipin & Blossom's baby; Moosh, Cheval's grave (flippers, Cheval Rope); Rafton,
-Ricky's gloves, Tingle's chart; then (to be continued) Rafton's raft, the Tokay item hunt, Wild Tokay."""
+Ricky's gloves, Tingle's chart, Rafton's raft to Crescent Island; then (to be continued) the Tokay item hunt,
+Wild Tokay."""
 
 from oracle_bot import act, cheats, ram
 from oracle_bot.config import DONATIONS
@@ -157,3 +158,27 @@ def island_chart(e):
     tingle = ram.CONST["INTERAC_TINGLE"]
     act.wait_until(e, lambda e: act.find(e, "interaction", tingle).z == 0, 300, "Tingle to come down")
     act.talk(e, tingle, choices=[0], quiet=30)
+
+
+@R.step(done=lambda e: ram.room_flag(e, 1, 0xA8, 0x40),
+        note="off Tingle's plateau, to the past by Nayru's portal; with the chart Rafton has the raft ready (he "
+        "goes through to his workshop, whose back door leads to it); sail round the rocks east of his house "
+        "(1:a7 down, c7, c8, up b8) into 1:a8, where a storm wrecks the raft on Crescent Island (1:aa) and the "
+        "Tokay take everything")
+def raft_to_crescent(e):
+    act.walk_to(e, (104, 24))  # (a jump down the cliff)
+    act.travel_to(e, 0x3A, at=(56, 24))
+    act.time_portal(e, NAYRU_PORTAL, stand=(56, 24))
+    act.travel_to(e, 0xA7)
+    act.enter(e, (2, 4), "up")
+    act.exit_room(e, "right")
+    act.exit_room(e, "down")
+    act.walk_to(e, (72, 120))
+    act.hold_until(e, "down", lambda e: ram.u8(e, "wLinkObjectIndex") == 0xD1, 90, "onto the raft")
+    act.settle(e, quiet=20)
+    act.exit_room(e, "down")
+    act.exit_room(e, "down", span=(88, 140))  # east of the whirlpools
+    act.exit_room(e, "right", span=(16, 48))
+    act.exit_room(e, "up")
+    act.exit_room(e, "up")
+    act.settle(e, quiet=60)

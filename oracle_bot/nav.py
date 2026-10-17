@@ -38,6 +38,9 @@ class Body:
 LINK = Body(v=((-2, 6), (-3, 2)), h=((0, 5), (-4, 3)))
 # An animal carrying him is bigger (companionCalculateAdjacentWallsBitset, specialObjects/commonCode.s).
 ANIMAL = Body(v=((-5, 8), (-3, 4)), h=((-3, 6), (-5, 6)))
+# Rafton's raft: only water carries it (raftCalculateAdjacentWallsBitset, object_code/ages/specialObjects/raft.s).
+RAFT = Body(v=((-6, 5), (-5, 4)), h=((-5, 4), (-6, 5)))
+RAFT_WATER = ("hazard:water", "hazard:seawater")  # (it could cross whirlpools too, but they're no place to be)
 STEP = 4  # lattice spacing (px) for planning
 
 TILETYPE = {v: k[9:] for k, v in ram.CONST.items() if k.startswith("TILETYPE_") and not k.startswith("TILETYPE_SS")}
@@ -103,7 +106,8 @@ def grid(e: Emu) -> Grid:
     lay = np.frombuffer(ram.read(e, "wRoomLayout", 0xC0), np.uint8).reshape(12, 16)[:h, :w]
     mode = ram.u8(e, "wActiveCollisions")
     riding = ram.u8(e, "wLinkObjectIndex") == 0xD1 and not ram.riding_cart(e)
-    g = Grid(h, w, mode, col.copy(), lay.copy(), body=ANIMAL if riding else LINK)
+    raft = riding and ram.u8(e, "w1Companion.id") == ram.CONST["SPECIALOBJECT_RAFT"]
+    g = Grid(h, w, mode, col.copy(), lay.copy(), body=RAFT if raft else ANIMAL if riding else LINK)
     types, cliffs, warps = table("types", mode), table("cliffs", mode), table("warps", mode)
     inter, breakable = table("interactable", mode), table("breakable", mode)
     for r in range(h):
@@ -143,6 +147,8 @@ def grid(e: Emu) -> Grid:
 def blocked_pixels(g: Grid, allow: frozenset[str] = frozenset(), unblock: frozenset[tuple[int, int]] = frozenset()) -> np.ndarray:
     """(16h, 16w) bool: pixels Link's box may not overlap. `unblock`: warp tiles to treat as floor (the one
     Link arrived on, which won't send him back until he has stepped off it)."""
+    if g.body is RAFT:
+        return np.kron([[k not in RAFT_WATER for k in row] for row in g.kind], np.ones((16, 16), bool))
     px = g.pixel_solid()
     for r in range(g.h):
         for c in range(g.w):
@@ -294,7 +300,7 @@ def ledges(g: Grid, cl: Clearance) -> dict[tuple[int, int], list[tuple[int, int]
                 ly, lx = ly - ly % STEP, lx - lx % STEP
                 if not (0 <= ly < H and 0 <= lx < W):
                     break
-                if cl.ok[ly, lx]:
+                if cl.h[ly, lx] and cl.v[ly, lx]:  # (free to move on in any direction)
                     out.setdefault((ay, ax), []).append((ly, lx))
                     break
     return out
