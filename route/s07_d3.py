@@ -1,11 +1,11 @@
-"""D2 -> D3: the doctor money for Bipin & Blossom's baby; Moosh, Cheval's grave (flippers, Cheval Rope); then
-(to be continued) Rafton's raft, Ricky's gloves, Tingle's chart, the Tokay item hunt, Wild Tokay."""
+"""D2 -> D3: the doctor money for Bipin & Blossom's baby; Moosh, Cheval's grave (flippers, Cheval Rope); Rafton,
+Ricky's gloves, Tingle's chart; then (to be continued) Rafton's raft, the Tokay item hunt, Wild Tokay."""
 
 from oracle_bot import act, cheats, ram
 from oracle_bot.config import DONATIONS
 from oracle_bot.runner import Route
 
-from .common import CFG
+from .common import CFG, LYNNA_PORTAL, LYNNA_PORTAL_STAND, NAYRU_PORTAL
 
 R = Route()
 
@@ -27,11 +27,7 @@ def talk_to_cheval(e):
         "Blossom asks yes/no, then how much (config donation; rupees topped up)")
 def doctor_donation(e):
     act.travel_to(e, 0x48)
-    act.walk_to(e, (104, 88))
-    act.play_harp(e)
-    act.walk_to(e, (72, 88), leave_ok=True, stop_on_scene=True)
-    act.wait_until(e, lambda e: not ram.is_past(e), 300, "time warp")
-    act.settle(e, quiet=60)
+    act.time_portal(e, LYNNA_PORTAL, LYNNA_PORTAL_STAND)
     act.travel_to(e, 0x47)
     act.enter(e, (2, 5), "up")
     act.settle(e, quiet=30)
@@ -47,11 +43,7 @@ def rescue_moosh(e):
     act.travel_to(e, 0x6C)
     act.fight(e)
     act.settle(e, quiet=30)
-    my, mx = ram.u8(e, "w1Companion.yh"), ram.u8(e, "w1Companion.xh")
-    act.walk_to(e, lambda y, x: abs(x - mx) <= 2 and 16 <= y - my <= 20)
-    act.tap(e, "up", hold=8)
-    act.tap(e, "a")
-    act.settle(e, quiet=30)
+    act.talk_companion(e)
     act.wait_until(e, lambda e: ram.u8(e, "wLinkObjectIndex") == 0xD1, 60, "riding Moosh")
 
 
@@ -73,9 +65,8 @@ def chevals_grave(e):
         if start:
             act.walk_to(e, start)
         act.moosh_float(e, *waypoints)
-    act.walk_to(e, (56, 40))
-    act.tap(e, "b")  # get off
-    act.settle(e, quiet=30)
+    act.walk_to(e, (52, 40), tol=2)  # under the tombstone
+    act.dismount(e)
     act.push_tile(e, (2, 2), "up")
     act.enter(e, (2, 2), "up")
     for direction in ("up", "right", "down"):
@@ -101,3 +92,68 @@ def cheval_rope(e):
     act.exit_room(e, "down")
     act.enter(e, (8, 10), "down")
     act.exit_room(e, "down")
+
+
+@R.step(done=lambda e: ram.gflag(e, "GAVE_ROPE_TO_RAFTON"),
+        note="to the past by Nayru's portal; Rafton is in the west house of 1:a7 and wants the rope for his raft "
+        "(Ralph turns up on the way out)")
+def rafton_rope(e):
+    act.travel_to(e, 0x3A, at=(56, 24))
+    act.time_portal(e, NAYRU_PORTAL, stand=(56, 24))
+    act.travel_to(e, 0xA7)
+    act.enter(e, (2, 4), "up")
+    act.talk(e, ram.CONST["INTERAC_RAFTON"], choices=[0], quiet=30)
+    act.exit_room(e, "down")
+    act.settle(e, quiet=60)
+
+
+@R.step(done=lambda e: ram.has(e, "RICKY_GLOVES") or ram.u8(e, "wRickyState") & 0x20,
+        note="back to the present by Lynna City's portal; Ricky (0:6a, there once Rafton has the rope) lost his "
+        "gloves: after talking to him they're buried under the dirt at 0:98 (2,4)")
+def rickys_gloves(e):
+    act.travel_to(e, 0x48)
+    act.time_portal(e, LYNNA_PORTAL, LYNNA_PORTAL_STAND)
+    act.travel_to(e, 0x6A)
+    act.talk_companion(e)
+    act.travel_to(e, 0x98)
+    act.break_tile(e, (2, 4))
+    act.pickup(e)
+
+
+@R.step(done=lambda e: ram.u8(e, "wRickyState") & 0x20, note="give Ricky his gloves and he lets Link ride")
+def ricky(e):
+    act.travel_to(e, 0x6A)
+    act.talk_companion(e)
+    act.wait_until(e, lambda e: ram.u8(e, "wLinkObjectIndex") == 0xD1, 60, "riding Ricky")
+
+
+def ricky_hop(e, direction: str, there) -> None:
+    """Hold `direction` until Ricky has hopped (up a cliff, over a hole) and landed where there(y, x)."""
+    landed = lambda e: ram.u8(e, "w1Companion.state") == 5 and ram.u8(e, "w1Companion.zh") == 0  # noqa: E731
+    act.hold_until(e, direction, lambda e: there(*ram.link_px(e)) and landed(e), 180, f"Ricky hopping {direction}")
+
+
+@R.step(done=lambda e: ram.has(e, "ISLAND_CHART"),
+        note="Tingle floats over a plateau in 0:79 that only Ricky gets onto: punch through 0:7a's bushes, hop up "
+        "0:79's east cliff, down the gully into 0:89, over a hole and back up to the plateau's foot, hop up; on "
+        "foot, a jump-slash pops the balloon, and Tingle gives his chart to a friend")
+def island_chart(e):
+    act.exit_room(e, "down")
+    act.exit_room(e, "left")
+    act.walk_to(e, (88, 128), tol=2)
+    ricky_hop(e, "up", lambda y, x: y < 44)
+    act.exit_room(e, "down")
+    act.walk_to(e, (24, 72), tol=2)
+    ricky_hop(e, "left", lambda y, x: x < 44)
+    act.exit_room(e, "up")
+    act.walk_to(e, (104, 32), tol=2)
+    ricky_hop(e, "up", lambda y, x: y < 60)
+    act.dismount(e)
+    act.walk_to(e, (50, 40), tol=1)
+    act.face(e, "right")
+    feather, sword = act.ready(e, "FEATHER"), act.item_button(e, "SWORD")
+    act.tap(e, feather, hold=2, after=6)
+    act.tap(e, sword)
+    tingle = ram.CONST["INTERAC_TINGLE"]
+    act.wait_until(e, lambda e: act.find(e, "interaction", tingle).z == 0, 300, "Tingle to come down")
+    act.talk(e, tingle, choices=[0], quiet=30)

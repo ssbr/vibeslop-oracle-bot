@@ -15,19 +15,36 @@ from .emu import Emu
 
 _TILES = ram._DATA["tiles"]
 
-# Link's wall checks relative to (yh, xh), inclusive pixel ranges (calculateAdjacentWallsBitset in
-# object_code/common/specialObjects/link.s): moving vertically he needs columns x-3..x+2 clear over rows
-# y-2..y+6; moving horizontally, rows y..y+5 clear over columns x-4..x+3.
-V_BOX = ((-2, 6), (-3, 2))
-H_BOX = ((0, 5), (-4, 3))
-BOX_Y = (-2, 6)  # overall extent, for "which tiles does Link touch"
-BOX_X = (-4, 3)
+Box = tuple[tuple[int, int], tuple[int, int]]  # inclusive pixel ranges ((rows), (columns)) relative to (yh, xh)
+
+
+@dataclass(frozen=True)
+class Body:
+    """Wall checks of whatever the player moves: the rows/columns that must be clear to move vertically (`v`)
+    or horizontally (`h`)."""
+
+    v: Box
+    h: Box
+
+    @property
+    def extent(self) -> Box:
+        """Overall extent, for "which tiles does it touch"."""
+        return ((min(self.v[0][0], self.h[0][0]), max(self.v[0][1], self.h[0][1])),
+                (min(self.v[1][0], self.h[1][0]), max(self.v[1][1], self.h[1][1])))
+
+
+# Link: moving vertically he needs columns x-3..x+2 clear over rows y-2..y+6; moving horizontally, rows y..y+5
+# over columns x-4..x+3 (calculateAdjacentWallsBitset in object_code/common/specialObjects/link.s).
+LINK = Body(v=((-2, 6), (-3, 2)), h=((0, 5), (-4, 3)))
+# An animal carrying him is bigger (companionCalculateAdjacentWallsBitset, specialObjects/commonCode.s).
+ANIMAL = Body(v=((-5, 8), (-3, 4)), h=((-3, 6), (-5, 6)))
 STEP = 4  # lattice spacing (px) for planning
 
 TILETYPE = {v: k[9:] for k, v in ram.CONST.items() if k.startswith("TILETYPE_") and not k.startswith("TILETYPE_SS")}
 HAZARDS = {"HOLE", "WARPHOLE", "WATER", "LAVA", "SEAWATER", "WHIRLPOOL"}
 # Abilities -> BREAKABLETILESOURCE_* values they provide (constants/common/breakableTileSources.s).
-BREAK_SOURCES = {"bracelet": {0}, "sword": {1}, "sword2": {1, 2}, "bombs": {4}, "shovel": {6}, "ember": {12}}
+BREAK_SOURCES = {"bracelet": {0}, "sword": {1}, "sword2": {1, 2}, "bombs": {4}, "shovel": {6}, "ember": {12},
+                 "punch": {15}}  # (Ricky's)
 
 
 def table(name: str, mode: int) -> dict[int, int]:
@@ -42,6 +59,7 @@ class Grid:
     collision: np.ndarray  # (h, w)
     tiles: np.ndarray  # (h, w) metatile ids
     kind: list[list[str]] = field(default_factory=list)  # per metatile: free/solid/partial/hazard:X/break/cliff/warp/...
+    body: Body = LINK
 
     def pixel_solid(self) -> np.ndarray:
         """(16h, 16w) bool: solidity from collision bytes, at pixel resolution (as Link's collision sees it)."""
@@ -84,7 +102,8 @@ def grid(e: Emu) -> Grid:
     col = np.frombuffer(ram.read(e, "wRoomCollisions", 0xC0), np.uint8).reshape(12, 16)[:h, :w]
     lay = np.frombuffer(ram.read(e, "wRoomLayout", 0xC0), np.uint8).reshape(12, 16)[:h, :w]
     mode = ram.u8(e, "wActiveCollisions")
-    g = Grid(h, w, mode, col.copy(), lay.copy())
+    riding = ram.u8(e, "wLinkObjectIndex") == 0xD1 and not ram.riding_cart(e)
+    g = Grid(h, w, mode, col.copy(), lay.copy(), body=ANIMAL if riding else LINK)
     types, cliffs, warps = table("types", mode), table("cliffs", mode), table("warps", mode)
     inter, breakable = table("interactable", mode), table("breakable", mode)
     for r in range(h):
@@ -147,7 +166,7 @@ def break_sources(kind: str) -> set[int]:
 def breaker(kind: str, allow: frozenset[str]) -> str | None:
     """The allowed ability that breaks this breakable tile kind, if any (sword preferred)."""
     sources = break_sources(kind)
-    for ability in ("sword", "sword2", "shovel", "bracelet", "ember", "bombs"):
+    for ability in ("sword", "sword2", "shovel", "bracelet", "ember", "bombs", "punch"):
         if ability in allow and BREAK_SOURCES[ability] & sources:
             return ability
     return None
@@ -224,7 +243,7 @@ def clearance(g: Grid, allow: frozenset[str] = frozenset(), blockers: list[tuple
     """`blockers` are solid objects (y, x, ry, rx): Link can't get within |dy| < ry and |dx| < rx of them,
     where ry/rx are the sums of both objects' collision radii (preventObjectHFromPassingObjectD)."""
     px = blocked_pixels(g, allow, unblock)
-    c = Clearance(_box_free(px, H_BOX), _box_free(px, V_BOX))
+    c = Clearance(_box_free(px, g.body.h), _box_free(px, g.body.v))
     for by, bx, ry, rx in blockers:
         for m in (c.h, c.v):
             m[max(0, by - ry + 1):max(0, by + ry), max(0, bx - rx + 1):max(0, bx + rx)] = False
@@ -342,7 +361,8 @@ def brink_nodes(g: Grid, allow: frozenset[str]) -> np.ndarray:
         for c in range(g.w):
             k = g.kind[r][c]
             px[16 * r:16 * r + 16, 16 * c:16 * c + 16] = k.startswith("hazard:") and k[7:] not in allow
-    box = ((BOX_Y[0] - BRINK, BOX_Y[1] + BRINK), (BOX_X[0] - BRINK, BOX_X[1] + BRINK))
+    (y0, y1), (x0, x1) = g.body.extent
+    box = ((y0 - BRINK, y1 + BRINK), (x0 - BRINK, x1 + BRINK))
     return ~_box_free(px, box)
 
 

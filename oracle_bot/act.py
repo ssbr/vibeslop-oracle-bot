@@ -81,6 +81,9 @@ def steer(dy: int, dx: int) -> str:
 
 def abilities(e: Emu) -> frozenset[str]:
     """What Link can currently get past: used as the default `allow` for navigation."""
+    if ram.u8(e, "wLinkObjectIndex") == 0xD1 and not ram.riding_cart(e):
+        # Riding an animal: no items, only its own moves (its jumps are scripted where a route needs them).
+        return frozenset({"punch"}) if ram.u8(e, "w1Companion.id") == ram.CONST["SPECIALOBJECT_RICKY"] else frozenset()
     out = set()
     if ram.has(e, "SWORD"):
         out.add("sword2" if ram.u8(e, "wSwordLevel") >= 2 else "sword")
@@ -139,6 +142,12 @@ def use(e: Emu, item: str, direction: str | None = None, after: int = 14) -> Non
     if direction:
         face(e, direction)
     tap(e, button, hold=2, after=after)
+
+
+def punch(e: Emu, direction: str) -> None:
+    """Riding Ricky: punch toward `direction` (A; specialObjects/ricky.s)."""
+    face(e, direction)
+    tap(e, "a", hold=2, after=14)
 
 
 def slash(e: Emu, direction: str) -> None:
@@ -202,11 +211,22 @@ def play_harp(e: Emu) -> None:
     wait_until(e, lambda e: ram.u8(e, "wDisabledObjects") == 0 and ram.controllable(e), 600, "harp song")
 
 
-def box_tiles(y: int, x: int) -> set[tuple[int, int]]:
-    """Metatiles overlapped by Link's tile-collision box at (y, x)."""
+def time_portal(e: Emu, spot: tuple[int, int], stand: tuple[int, int] | None = None) -> None:
+    """Open the time portal at pixel `spot` with the Tune of Echoes, played from `stand` (or where Link is: the
+    harp won't play on the spot itself), and step into it; returns once the other era is controllable."""
+    past = ram.is_past(e)
+    if stand:
+        walk_to(e, stand)
+    play_harp(e)
+    walk_to(e, spot, leave_ok=True, stop_on_scene=True)
+    wait_until(e, lambda e: ram.is_past(e) != past, 300, "time warp")
+    settle(e, quiet=60)
 
-    return {(r, c) for r in range((y + nav.BOX_Y[0]) // 16, (y + nav.BOX_Y[1]) // 16 + 1)
-            for c in range((x + nav.BOX_X[0]) // 16, (x + nav.BOX_X[1]) // 16 + 1)}
+
+def box_tiles(y: int, x: int, body: nav.Body) -> set[tuple[int, int]]:
+    """Metatiles overlapped by `body`'s tile-collision box at (y, x)."""
+    (y0, y1), (x0, x1) = body.extent
+    return {(r, c) for r in range((y + y0) // 16, (y + y1) // 16 + 1) for c in range((x + x0) // 16, (x + x1) // 16 + 1)}
 
 
 def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozenset[str]) -> bool:
@@ -215,7 +235,7 @@ def break_first_obstacle(e: Emu, g, plan: list[tuple[int, int]], allow: frozense
     tried = set()
     errors = []
     for i, (y, x) in enumerate(plan):
-        hits = sorted((abs(r * 16 + 8 - y) + abs(c * 16 + 8 - x), (r, c)) for r, c in box_tiles(y, x)
+        hits = sorted((abs(r * 16 + 8 - y) + abs(c * 16 + 8 - x), (r, c)) for r, c in box_tiles(y, x, g.body)
                       if 0 <= r < g.h and 0 <= c < g.w and (r, c) not in tried
                       and g.kind[r][c].startswith("break:") and nav.breaker(g.kind[r][c], allow))
         for _, (r, c) in hits:
@@ -256,12 +276,11 @@ def select_seeds(e: Emu, seed: str) -> None:
         ram.poke(e, "wSatchelSelectedSeeds", index, "equip")
 
 
-def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple[int, int]],
-              allow: frozenset[str] | None = None, after: int = 14,
-              wait: Callable[[Emu], None] | None = None) -> str:
-    """Stand where using `item` hits metatile `tile`, use it until the tile changes, and return the facing
-    direction used. Spots lined up with the tile's center are preferred; `wait` runs after each use (e.g. for
-    an ember to burn out) before checking the tile."""
+def strike_at(e: Emu, tile: tuple[int, int], strike: Callable[[Emu, str], None], offsets: dict[str, tuple[int, int]],
+              allow: frozenset[str] | None = None, wait: Callable[[Emu], None] | None = None, tol: int = 0) -> str:
+    """Stand (within `tol` px) where `strike(e, direction)` (using an item, Ricky's punch) hits metatile `tile`,
+    strike until the tile changes, and return the facing direction used. Spots lined up with the tile's center
+    are preferred; `wait` runs after each strike (e.g. for an ember to burn out) before checking the tile."""
     r, c = tile
     g = nav.grid(e)
     ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
@@ -278,22 +297,22 @@ def strike_at(e: Emu, tile: tuple[int, int], item: str, offsets: dict[str, tuple
     errors = []
     for _, d, y, x in sorted(spots)[:6]:
         try:
-            walk_to(e, (y, x), allow, tol=0)
+            walk_to(e, (y, x), allow, tol=tol)
         except Stuck as err:
             errors.append(f"{d}: {str(err).splitlines()[0]}")
             continue
         settle(e)  # a text box (telepathy, NPC) may have popped up on the way
-        use(e, item, d, after=after)
+        strike(e, d)
         if wait:
             wait(e)
         e.step(6)
         if ram.u8(e, "wRoomLayout", r * 16 + c) != before:
             return d
         errors.append(f"{d} from {(y, x)}: no effect")
-    raise Stuck(f"couldn't hit {tile} with {item}: {errors}")
+    raise Stuck(f"couldn't hit {tile}: {errors}")
 
 
-BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel", "ember", "bombs"})
+BREAKERS = frozenset({"sword", "sword2", "bracelet", "shovel", "ember", "bombs", "punch"})
 MAX_SCENE_FRAMES = 60 * 60 * 5
 
 
@@ -301,9 +320,11 @@ def hit_tile(e: Emu, tile: tuple[int, int], how: str, allow: frozenset[str]) -> 
     """Break metatile `tile` with ability `how` (as chosen by nav.breaker); returns the direction Link faced."""
     rest = allow - BREAKERS  # walking to the spot mustn't break anything else
     if how in ("sword", "sword2"):
-        return strike_at(e, tile, "SWORD", SWORD_OFFSETS, rest)
+        return strike_at(e, tile, lambda e, d: use(e, "SWORD", d), SWORD_OFFSETS, rest)
     if how == "shovel":
-        return strike_at(e, tile, "SHOVEL", SHOVEL_OFFSETS, rest, after=24)
+        return strike_at(e, tile, lambda e, d: use(e, "SHOVEL", d, after=24), SHOVEL_OFFSETS, rest)
+    if how == "punch":
+        return strike_at(e, tile, punch, SWORD_OFFSETS, rest, tol=3)  # (Ricky hops: no pixel-exact stops)
     if how == "bracelet":
         direction = lift_at(e, tile, rest)
         settle(e)
@@ -312,9 +333,10 @@ def hit_tile(e: Emu, tile: tuple[int, int], how: str, allow: frozenset[str]) -> 
         return direction
     if how == "ember":
         select_seeds(e, "EMBER")
-        return strike_at(e, tile, "SEED_SATCHEL", SEED_OFFSETS, rest, after=4, wait=wait_seeds_done)
+        return strike_at(e, tile, lambda e, d: use(e, "SEED_SATCHEL", d, after=4), SEED_OFFSETS, rest,
+                         wait=wait_seeds_done)
     if how == "bombs":
-        return strike_at(e, tile, "BOMB", BOMB_OFFSETS, rest, after=10, wait=set_bomb_down)
+        return strike_at(e, tile, lambda e, d: use(e, "BOMB", d, after=10), BOMB_OFFSETS, rest, wait=set_bomb_down)
     raise Stuck(f"can't break {tile} with {how}")
 
 
@@ -614,6 +636,26 @@ def talk(e: Emu, obj_id: int, subid: int | None = None, choices: Sequence[int] =
     tap(e, "a", hold=1, after=4)
     wait_until(e, lambda e: not ram.controllable(e), 30, "NPC to respond")
     settle(e, choices, quiet=quiet)
+
+
+def talk_companion(e: Emu, quiet: int = 30) -> None:
+    """Talk to the animal companion (Ricky, Dimitri or Moosh: the companion special object, not an interaction),
+    from below."""
+    cy, cx = ram.u8(e, "w1Companion.yh"), ram.u8(e, "w1Companion.xh")
+    walk_to(e, lambda y, x: abs(x - cx) <= 2 and 16 <= y - cy <= 20)
+    tap(e, "up", hold=8)  # face it, up against it
+    tap(e, "a")
+    settle(e, quiet=quiet)
+
+
+def dismount(e: Emu, attempts: int = 5) -> None:
+    """Get off the animal Link is riding (B; ignored while it's still landing from a jump)."""
+    for _ in range(attempts):
+        tap(e, "b", hold=2, after=30)
+        if ram.u8(e, "wLinkObjectIndex") != 0xD1:
+            settle(e)
+            return
+    raise Stuck("couldn't get off the animal")
 
 
 def play_until(e: Emu, pred: Callable[[Emu], bool], max_frames: int = 60 * 60 * 5, choices: Sequence[int] = (),
@@ -967,8 +1009,7 @@ def pickup(e: Emu, obj_id: int = INTERAC_TREASURE, max_frames: int = 600) -> Non
 
 def burn(e: Emu, tile: tuple[int, int]) -> None:
     """Burn the tree/bush (or light the torch) at metatile `tile` with an Ember Seed from the satchel."""
-    select_seeds(e, "EMBER")
-    strike_at(e, tile, "SEED_SATCHEL", SEED_OFFSETS, after=4, wait=wait_seeds_done)
+    hit_tile(e, tile, "ember", frozenset())
     settle(e)
 
 

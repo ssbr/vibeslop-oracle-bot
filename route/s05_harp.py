@@ -5,7 +5,7 @@ the Wing Dungeon open (Deku Forest, 1:83)."""
 from oracle_bot import act, cheats, menus, ram
 from oracle_bot.runner import Route
 
-from .common import CFG
+from .common import CFG, NAYRU_PORTAL
 
 R = Route()
 
@@ -72,10 +72,7 @@ def portal_to_past(e):
     act.enter(e, (2, 2), "down")  # Link arrives on these stairs: step off and back on
     act.exit_room(e, "down", expect=(0, 0x3A))
     act.settle(e, quiet=60)
-    act.play_harp(e)
-    act.walk_to(e, (40, 24), leave_ok=True, stop_on_scene=True)
-    act.wait_until(e, ram.is_past, 300, "time warp")
-    act.settle(e, quiet=60)
+    act.time_portal(e, NAYRU_PORTAL)
 
 
 @R.step(done=lambda e: ram.has(e, "MYSTERY_SEEDS"),
