@@ -165,6 +165,34 @@ def jump(e: Emu, direction: str | None = None, max_frames: int = 90) -> None:
         e.set_buttons(0)
 
 
+def moosh_float(e: Emu, *waypoints: tuple[int, int], max_frames: int = 300) -> None:
+    """Riding Moosh: jump and float through pixel `waypoints` across pits, steering in the air and fluttering
+    (tapping A, at most 16 times; holding A would charge a stomp) until over the last one, then land
+    (object_code/common/specialObjects/moosh.s)."""
+    points = list(waypoints)
+    airborne = lambda e: ram.u8(e, "w1Companion.zh") != 0  # noqa: E731
+    e.set_buttons(mask_of("a"))
+    e.step(2)
+    e.set_buttons(0)
+    for i in range(max_frames):
+        y, x = ram.link_px(e)
+        ty, tx = points[0]
+        if abs(ty - y) <= 3 and abs(tx - x) <= 3 and len(points) > 1:
+            points.pop(0)
+            ty, tx = points[0]
+        dy, dx = ty - y, tx - x
+        arrived = len(points) == 1 and abs(dy) <= 3 and abs(dx) <= 3
+        move = steer(dy if abs(dy) > 1 else 0, dx if abs(dx) > 1 else 0)
+        flutter = not arrived and i % 8 < 2
+        keys = "+".join(k for k in (move, "a" if flutter else "") if k)
+        e.set_buttons(mask_of(keys) if keys else 0)
+        e.step()
+        if i > 4 and not airborne(e):
+            break
+    e.set_buttons(0)
+    settle(e)
+
+
 def play_harp(e: Emu) -> None:
     """Play the Harp's current tune and wait for the song to finish (it freezes everything but Link, who
     can't move until it ends)."""
@@ -380,11 +408,12 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
             dy, dx = wy - pos[0], wx - pos[1]
             if max(abs(dy), abs(dx)) > 2 * nav.STEP + 2:
                 along, across = (dy, dx) if abs(dy) > abs(dx) else (dx, dy)
-                if abs(across) <= 2 and nav.hop_between(g, pos, (wy, wx)):
+                if "feather" in allow and abs(across) <= 2 and nav.hop_between(g, pos, (wy, wx)):
                     # Feather hop over a gap, from the takeoff node.
                     try:
                         jump(e, steer(dy, 0) if abs(dy) > abs(dx) else steer(0, dx))
                     except Stuck:
+                        e.step()
                         plan = []  # replan from wherever Link ended up
                         continue
                     plan.pop(0)
@@ -709,11 +738,16 @@ def foes_in_room(e: Emu) -> list[ram.Obj]:
     return [o for o in ram.objects(e, "enemy") if o.id not in NOT_FOES and o.health < 0x7F]
 
 
+OUT_OF_REACH = 300
+
+
 def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None,
           target: Callable[[Emu, list[ram.Obj]], ram.Obj | None] | None = None) -> None:
-    """Attack enemies with the sword until none remain (or `done`). Enemies Link can't get to (walled off, over
-    pits) are left alone. `target` picks which visible foe to go for (default: the nearest)."""
+    """Attack enemies with the sword until none remain (or `done`). Enemies Link hasn't been able to get to for
+    OUT_OF_REACH frames (walled off, over pits) are left alone; flying ones (Ghinis, Keese) drift back into reach
+    before then. `target` picks which visible foe to go for (default: the nearest)."""
     clear_since = [None]
+    out_since: dict[int, int] = {}  # enemy slot -> frame it went out of reach
     g = nav.grid(e)
     allow = abilities(e) - BREAKERS
     air = nav.clearance(g, allow | nav.JUMPABLE) if "feather" in allow else None
@@ -724,8 +758,14 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
         y0, x0 = (int(round(v / nav.STEP) * nav.STEP) for v in (o.y, o.x))
         return any((y0 + dy, x0 + dx) in reach for dy in range(-16, 17, nav.STEP) for dx in range(-16, 17, nav.STEP))
 
+    def in_play(o: ram.Obj) -> bool:
+        if reachable(o):
+            out_since.pop(o.slot, None)
+            return True
+        return e.frame - out_since.setdefault(o.slot, e.frame) < OUT_OF_REACH
+
     def foes(e: Emu) -> list[ram.Obj]:
-        return [o for o in foes_in_room(e) if reachable(o)]
+        return [o for o in foes_in_room(e) if in_play(o)]
 
     def room_clear(e: Emu) -> bool:
         # Enemies can briefly vanish (Zols splitting into Gels, spawn puffs): require 30 quiet frames.
@@ -812,8 +852,9 @@ class Chase:
         if self.stall >= 10:
             self.stall = 0
             try:
+                # (long enough for detours, e.g. round by the stairs to an enemy below a ledge)
                 walk_to(e, lambda py, px: abs(py - foe.y) + abs(px - foe.x) <= 16
-                        and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=60)
+                        and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=300)
             except Stuck:
                 e.step(4)
 

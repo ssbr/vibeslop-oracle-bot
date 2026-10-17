@@ -23,11 +23,13 @@ OPPOSITE = {"up": "down", "down": "up", "left": "right", "right": "left"}
 DELTA = {"up": -16, "down": 16, "left": -1, "right": 1}
 # Ability sets the graph is computed for, in the order Link gets them. Routing uses the largest tier Link has.
 TIERS = [frozenset({"sword"}), frozenset({"sword", "shovel"}), frozenset({"sword", "shovel", "ember"}),
-         frozenset({"sword", "shovel", "ember", "bracelet"})]
+         frozenset({"sword", "shovel", "ember", "bracelet"}),
+         frozenset({"sword", "shovel", "ember", "bracelet", "feather"})]
 
 
-def components(cl: nav.Clearance) -> dict[tuple[int, int], int]:
-    """Label connected components of lattice nodes under Link's movement rules."""
+def components(cl: nav.Clearance, hops: dict | None = None) -> dict[tuple[int, int], int]:
+    """Label connected components of lattice nodes under Link's movement rules (plus feather `hops`, see
+    nav.hop_table)."""
     ok = cl.ok
     H, W = ok.shape
     comp: dict[tuple[int, int], int] = {}
@@ -40,23 +42,30 @@ def components(cl: nav.Clearance) -> dict[tuple[int, int], int]:
             queue = deque([(y0, x0)])
             while queue:
                 y, x = queue.popleft()
-                for dy, dx in ((-nav.STEP, 0), (nav.STEP, 0), (0, -nav.STEP), (0, nav.STEP)):
-                    p = (y + dy, x + dx)
-                    if p not in comp and cl.can_move((y, x), p):
+                steps = [(y + dy, x + dx) for dy, dx in ((-nav.STEP, 0), (nav.STEP, 0), (0, -nav.STEP), (0, nav.STEP))
+                         if cl.can_move((y, x), (y + dy, x + dx))]
+                if hops is not None:
+                    steps += nav.hops(hops, (y, x))  # (hops are two-way: there's always one back)
+                for p in steps:
+                    if p not in comp:
                         comp[p] = n
                         queue.append(p)
             n += 1
     return comp
 
 
-def describe_room(g: nav.Grid) -> list[dict]:
-    return [describe_tier(g, tier) for tier in TIERS]
+def describe_room(g: nav.Grid, tiers: range | None = None, old: list[dict] | None = None) -> list[dict]:
+    """All tiers' descriptions; with `tiers`, only those are (re)computed and the rest kept from `old`."""
+    tiers = range(len(TIERS)) if tiers is None else tiers
+    old = old or []
+    return [describe_tier(g, TIERS[i]) if i in tiers or i >= len(old) else old[i] for i in range(len(TIERS))]
 
 
 def describe_tier(g: nav.Grid, allow: frozenset[str]) -> dict:
     cl = nav.clearance(g, allow)
     H, W = cl.ok.shape
-    comp = components(cl)
+    hops = nav.hop_table(cl, nav.clearance(g, allow | nav.JUMPABLE)) if "feather" in allow else None
+    comp = components(cl, hops)
     edges = {}
     for d in OPPOSITE:
         test = nav.edge_zone(d, H, W)

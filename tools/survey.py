@@ -1,6 +1,8 @@
 """Dev-only map survey: warp a throwaway emulator to every room of a group and record what it looks like.
 
-Usage: uv run python tools/survey.py <snapshot> <group> [rooms...]   (rooms as hex, default all 256)
+Usage: uv run python tools/survey.py <snapshot> <group> [--tiers N,M] [rooms...]   (rooms as hex, default all 256)
+--tiers recomputes only those ability tiers (world.TIERS indices) and keeps the others: surveys show the world
+as it is in the snapshot, so older tiers are best left as surveyed from snapshots of their time.
 Writes runs/survey/g<group>.txt (ASCII map per room), g<group>_<room>.png screenshots, g<group>_map.png
 (stitched overview), and updates oracle_bot/data/world.json (the room graph used by world.travel_to).
 The snapshot must be in normal gameplay. Nothing here touches real runs: warps are `dev` writes.
@@ -33,8 +35,14 @@ def warp(e, group: int, room: int, pos: int = 0x55) -> bool:
 
 
 def main() -> int:
-    snap, group = Path(sys.argv[1]), int(sys.argv[2])
-    rooms = [int(r, 16) for r in sys.argv[3:]] or list(range(256))
+    args = sys.argv[1:]
+    tiers = None
+    if "--tiers" in args:
+        i = args.index("--tiers")
+        tiers = range(0) if not args[i + 1] else [int(t) for t in args[i + 1].split(",")]
+        del args[i:i + 2]
+    snap, group = Path(args[0]), int(args[1])
+    rooms = [int(r, 16) for r in args[2:]] or list(range(256))
     OUT.mkdir(parents=True, exist_ok=True)
     base = load_snapshot(snap.with_suffix(""))
     state = (base.state(), base.frame, len(base.log.ops))
@@ -48,7 +56,7 @@ def main() -> int:
             continue
         g = nav.grid(base)
         if ram.u8(base, "wActiveCollisions") == 0:  # overworld screens only
-            described[str(room)] = world.describe_room(g)
+            described[str(room)] = world.describe_room(g, tiers, described.get(str(room)))
         lines.append(f"== {group}:{room:02x}  tileset flags {ram.u8(base, 'wTilesetFlags'):02x}")
         lines.append(nav.ascii(base, g))
         Image.fromarray(base.screen()).save(OUT / f"g{group}_{room:02x}.png")

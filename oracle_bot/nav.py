@@ -194,8 +194,8 @@ class Clearance:
 
 
 def region(cl: Clearance, start: tuple[int, int], air: Clearance | None = None) -> set[tuple[int, int]]:
-    """Lattice nodes Link can walk to from `start` (snapped to the nearest free node); with `air` (see `hops`),
-    also hopping gaps with the feather."""
+    """Lattice nodes Link can walk to from `start` (snapped to the nearest free node); with `air` (see
+    `hop_table`), also hopping gaps with the feather."""
     ok = cl.ok
     H, W = ok.shape
     sy, sx = (int(round(v / STEP) * STEP) for v in start)
@@ -203,13 +203,14 @@ def region(cl: Clearance, start: tuple[int, int], air: Clearance | None = None) 
                   if 0 <= sy + dy < H and 0 <= sx + dx < W and ok[sy + dy, sx + dx])
     if not near:
         return set()
+    table = hop_table(cl, air) if air is not None else None
     seen = {near[0][1]}
     queue = deque(seen)
     while queue:
         y, x = queue.popleft()
         steps = [n for n in ((y - STEP, x), (y + STEP, x), (y, x - STEP), (y, x + STEP)) if cl.can_move((y, x), n)]
-        if air is not None:
-            steps += hops(cl, air, (y, x))
+        if table is not None:
+            steps += hops(table, (y, x))
         for n in steps:
             if n not in seen:
                 seen.add(n)
@@ -285,21 +286,37 @@ HOP = 32
 JUMPABLE = frozenset({"hole", "water", "seawater", "lava"})
 
 
-def hops(cl: Clearance, air: Clearance, p: tuple[int, int]) -> list[tuple[int, int]]:
-    """Feather jumps from lattice node `p`: straight 32px hops that clear a gap (`air` = clearance with the
-    gaps' hazards counted as floor) and land on ground with a few pixels to spare."""
-    H, W = cl.ok.shape
-    y, x = p
-    out = []
-    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-        n = (y + dy * HOP, x + dx * HOP)
-        short = (y + dy * (HOP - STEP), x + dx * (HOP - STEP))
-        if not (0 <= n[0] < H and 0 <= n[1] < W and cl.ok[n] and cl.ok[short]):
-            continue
-        flight = [(y + dy * d, x + dx * d) for d in range(STEP, HOP, STEP)]
-        if all(air.ok[q] for q in flight) and not all(cl.ok[q] for q in flight):
-            out.append(n)
+DIRS4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+
+def _shifted(a: np.ndarray, dy: int, dx: int) -> np.ndarray:
+    """out[y, x] = a[y + dy, x + dx] (False outside)."""
+    H, W = a.shape
+    out = np.zeros_like(a)
+    ys, yd = (slice(dy, H), slice(0, H - dy)) if dy >= 0 else (slice(0, H + dy), slice(-dy, H))
+    xs, xd = (slice(dx, W), slice(0, W - dx)) if dx >= 0 else (slice(0, W + dx), slice(-dx, W))
+    out[yd, xd] = a[ys, xs]
     return out
+
+
+def hop_table(cl: Clearance, air: Clearance) -> dict[tuple[int, int], np.ndarray]:
+    """Feather jumps, per direction: where a straight 32px hop clears a gap (`air` = clearance with the gaps'
+    hazards counted as floor) and lands on ground with a few pixels to spare."""
+    ok, aok = cl.ok, air.ok
+    out = {}
+    for dy, dx in DIRS4:
+        can = _shifted(ok, dy * HOP, dx * HOP) & _shifted(ok, dy * (HOP - STEP), dx * (HOP - STEP))
+        gap = np.zeros_like(ok)
+        for d in range(STEP, HOP, STEP):
+            can &= _shifted(aok, dy * d, dx * d)
+            gap |= ~_shifted(ok, dy * d, dx * d)
+        out[(dy, dx)] = can & gap
+    return out
+
+
+def hops(table: dict[tuple[int, int], np.ndarray], p: tuple[int, int]) -> list[tuple[int, int]]:
+    y, x = p
+    return [(y + dy * HOP, x + dx * HOP) for (dy, dx), m in table.items() if m[y, x]]
 
 
 def hop_between(g: Grid, a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -324,7 +341,7 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
     cl = clearance(g, allow, blockers, unblock)
     exclude_edges(cl, exits)
     jumps = ledges(g, cl)
-    air = clearance(g, allow | JUMPABLE, blockers, unblock) if "feather" in allow else None
+    table = hop_table(cl, clearance(g, allow | JUMPABLE, blockers, unblock)) if "feather" in allow else None
     ok = cl.ok
     H, W = ok.shape
     if callable(goal):
@@ -375,8 +392,8 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
         steps = [((y + dy, x + dx), math.sqrt(2) if dy and dx else 1.0) for dy, dx in MOVES
                  if cl.can_move(p, (y + dy, x + dx))]
         steps += [(n, 6.0) for n in jumps.get(p, ())]
-        if air is not None:
-            steps += [(n, 12.0) for n in hops(cl, air, p)]
+        if table is not None:
+            steps += [(n, 12.0) for n in hops(table, p)]
         for n, step_cost in steps:
             nc = c + step_cost + extra(*n)
             if nc < cost.get(n, math.inf):
