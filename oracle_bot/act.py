@@ -545,8 +545,10 @@ def foes_in_room(e: Emu) -> list[ram.Obj]:
     return [o for o in ram.objects(e, "enemy") if o.id not in NOT_FOES]
 
 
-def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None) -> None:
-    """Attack the nearest enemy with the sword until none remain (or `done`)."""
+def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None,
+          target: Callable[[Emu, list[ram.Obj]], ram.Obj | None] | None = None) -> None:
+    """Attack enemies with the sword until none remain (or `done`). `target` picks which visible foe to go for
+    (default: the nearest)."""
     clear_since = [None]
 
     def room_clear(e: Emu) -> bool:
@@ -560,7 +562,7 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
 
     done = done or room_clear
     start = e.frame
-    stall = 0
+    chase = Chase()
     last_frame = -1
     while not done(e):
         if e.frame == last_frame:  # every pass must advance the game (walk_to may return at once)
@@ -574,8 +576,9 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
         y, x = ram.link_px(e)
         enemies = foes_in_room(e)
         foes = [o for o in enemies if o.visible]
-        if not foes:
-            if not enemies:
+        foe = target(e, foes) if target else min(foes, key=lambda o: abs(o.y - y) + abs(o.x - x), default=None)
+        if foe is None:
+            if not enemies or target:
                 e.step()
                 continue
             # Only hidden ones left (Zols in the floor etc.): walk up to one to make it come out.
@@ -585,27 +588,55 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
             except Stuck:
                 e.step(8)
             continue
-        foe = min(foes, key=lambda o: abs(o.y - y) + abs(o.x - x))
+        chase.attack(e, foe)
+
+
+class Chase:
+    """Close in on an enemy and slash at it, one step per call."""
+
+    def __init__(self):
+        self.stall = 0
+
+    def attack(self, e: Emu, foe: ram.Obj) -> None:
+        y, x = ram.link_px(e)
         dy, dx = foe.y - y, foe.x - x
         if abs(dy) + abs(dx) <= 18 and min(abs(dy), abs(dx)) <= 8:
             slash(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
-            stall = 0
-            continue
-        # Chase: steer straight at the nearest spot beside the enemy (cheap, re-aimed every frame); only plan
-        # around walls when that stops making progress.
+            self.stall = 0
+            return
+        # Steer straight at the nearest spot beside the enemy (cheap, re-aimed every frame); only plan around
+        # walls when that stops making progress.
         spot = min(((foe.y + oy, foe.x + ox) for oy, ox in ((14, 0), (-14, 0), (0, 14), (0, -14))),
                    key=lambda q: abs(q[0] - y) + abs(q[1] - x))
         e.set_buttons(_mask(steer(spot[0] - y, spot[1] - x)))
         e.step()
         e.set_buttons(0)
-        stall = stall + 1 if ram.link_px(e) == (y, x) else 0
-        if stall >= 10:
-            stall = 0
+        self.stall = self.stall + 1 if ram.link_px(e) == (y, x) else 0
+        if self.stall >= 10:
+            self.stall = 0
             try:
-                walk_to(e, lambda py, px, foe=foe: abs(py - foe.y) + abs(px - foe.x) <= 16
+                walk_to(e, lambda py, px: abs(py - foe.y) + abs(px - foe.x) <= 16
                         and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=60)
             except Stuck:
                 e.step(4)
+
+
+def grab(e: Emu, obj: ram.Obj, max_frames: int = 30) -> None:
+    """Pick up a grabbable object (bomb, Pumpkin Head's head...) with the bracelet."""
+    button = item_button(e, "BRACELET")
+    if button is None:
+        equip(e, "BRACELET", "a")
+        button = "a"
+    walk_to(e, lambda y, x: abs(y - obj.y) + abs(x - obj.x) <= 14 and min(abs(y - obj.y), abs(x - obj.x)) <= 4,
+            max_frames=120)
+    y, x = ram.link_px(e)
+    dy, dx = obj.y - y, obj.x - x
+    face(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
+    e.set_buttons(mask_of(button))
+    try:
+        wait_until(e, holding, max_frames, "grab")
+    finally:
+        e.set_buttons(0)
 
 
 def open_chest(e: Emu, tile: tuple[int, int], max_frames: int = 600) -> None:
@@ -713,8 +744,8 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
     ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
     y0, x0 = ram.link_px(e)
     spots = []
-    for d, (oy, ox) in SEED_OFFSETS.items():  # standing right next to the tile, facing it
-        y, x = 16 * r + 8 - oy, 16 * c + 8 - ox
+    for d in ("up", "down", "left", "right"):  # in contact with the tile, facing it
+        y, x = push_spot(r, c, d)
         for dy in range(-3, 4):
             for dx in range(-3, 4):
                 yy, xx = (y, x + dx) if d in ("up", "down") else (y + dy, x)
@@ -731,10 +762,17 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
         e.set_buttons(mask_of(f"{button}+{OPPOSITE_DIR[d]}"))
         try:
             wait_until(e, lambda e: ram.u8(e, "wRoomLayout", r * 16 + c) != before, 60, f"lift {tile}")
+            e.step(20)  # keep pulling through the lift animation (letting go early puts it back down)
         except Stuck:
             continue
         finally:
             e.set_buttons(0)
-        e.step(16)
-        return d
+        e.step(4)
+        if holding(e):
+            return d
     raise Stuck(f"couldn't lift {tile}")
+
+
+def holding(e: Emu) -> bool:
+    """Link is carrying something over his head (the bracelet's held-object item, subid $10)."""
+    return any(o.id == ram.CONST["ITEM_BRACELET"] and o.subid & 0x10 for o in ram.objects(e, "item"))
