@@ -155,6 +155,7 @@ def controllable(e: Emu) -> bool:
         and u8(e, "wCutsceneIndex") == 1
         and not text_active(e)
         and not menu_open(e)
+        and u8(e, "wUseSimulatedInput") == 0
         and u8(e, "wScrollMode") & 0x0E == 0
         and u8(e, "wPaletteThread_mode") == 0
         and u8(e, "wDisabledObjects") & 0x81 == 0
@@ -195,8 +196,7 @@ def objects(e: Emu, kind: str) -> list[Obj]:
         if raw[OBJ["enabled"]]:
             out.append(Obj(kind, page, raw[OBJ["id"]], raw[OBJ["subid"]], raw[OBJ["state"]],
                            raw[OBJ["yh"]], raw[OBJ["xh"]], raw[OBJ["health"]], bool(raw[OBJ["visible"]] & 0x80),
-                           # Radii are 0 until an NPC's script runs initcollisions; 6 is the usual value.
-                           raw[OBJ["collisionRadiusY"]] or 6, raw[OBJ["collisionRadiusX"]] or 6, raw[OBJ["enabled"]]))
+                           raw[OBJ["collisionRadiusY"]], raw[OBJ["collisionRadiusX"]], raw[OBJ["enabled"]]))
     return out
 
 

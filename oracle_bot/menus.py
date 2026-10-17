@@ -75,3 +75,16 @@ def save_game(e: Emu) -> None:
         tap(e, "down", after=10)
     tap(e, "a", after=10)
     wait_until(e, ram.controllable, 600, "return from save menu")
+
+
+def load_game(e: Emu) -> None:
+    """From power-on with a battery save present: title -> file 1 -> playing."""
+    e.step(400)
+    tap(e, "start", after=120)
+    tap(e, "start", after=120)
+    for _ in range(3):  # file 1, then its confirmation
+        tap(e, "a", after=90)
+        if ram.u8(e, "wGameState") == 2:
+            break
+    wait_until(e, ram.controllable, 1200, "game to load")
+    e.step(60)

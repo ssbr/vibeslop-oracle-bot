@@ -13,14 +13,19 @@ from .emu import Emu
 
 _TILES = ram._DATA["tiles"]
 
-# Link's tile-collision box relative to (yh, xh), inclusive. Measured by walking into walls.
-BOX_Y = (-2, 6)
+# Link's wall checks relative to (yh, xh), inclusive pixel ranges (calculateAdjacentWallsBitset in
+# object_code/common/specialObjects/link.s): moving vertically he needs columns x-3..x+2 clear over rows
+# y-2..y+6; moving horizontally, rows y..y+5 clear over columns x-4..x+3.
+V_BOX = ((-2, 6), (-3, 2))
+H_BOX = ((0, 5), (-4, 3))
+BOX_Y = (-2, 6)  # overall extent, for "which tiles does Link touch"
 BOX_X = (-4, 3)
 STEP = 4  # lattice spacing (px) for planning
 
 TILETYPE = {v: k[9:] for k, v in ram.CONST.items() if k.startswith("TILETYPE_") and not k.startswith("TILETYPE_SS")}
 HAZARDS = {"HOLE", "WARPHOLE", "WATER", "LAVA", "SEAWATER", "WHIRLPOOL"}
-SWORD_SOURCES = {1, 2}  # BREAKABLETILESOURCE_SWORD_L1/L2
+# Abilities -> BREAKABLETILESOURCE_* values they provide (constants/common/breakableTileSources.s).
+BREAK_SOURCES = {"bracelet": {0}, "sword": {1}, "sword2": {1, 2}, "bombs": {4}, "shovel": {6}}
 
 
 def table(name: str, mode: int) -> dict[int, int]:
@@ -36,22 +41,39 @@ class Grid:
     tiles: np.ndarray  # (h, w) metatile ids
     kind: list[list[str]] = field(default_factory=list)  # per metatile: free/solid/partial/hazard:X/break/cliff/warp/...
 
-    def quarter_solid(self) -> np.ndarray:
-        """(2h, 2w) bool: quarter-tile solidity from collision bytes alone."""
-        q = np.zeros((2 * self.h, 2 * self.w), bool)
+    def pixel_solid(self) -> np.ndarray:
+        """(16h, 16w) bool: solidity from collision bytes, at pixel resolution (as Link's collision sees it)."""
+        px = np.zeros((16 * self.h, 16 * self.w), bool)
         for r in range(self.h):
             for c in range(self.w):
-                v = int(self.collision[r, c])
-                if v == 0:
-                    continue
-                if v >= 0x10:
-                    q[2 * r:2 * r + 2, 2 * c:2 * c + 2] = True
-                    continue
-                q[2 * r, 2 * c] = bool(v & 8)
-                q[2 * r, 2 * c + 1] = bool(v & 4)
-                q[2 * r + 1, 2 * c] = bool(v & 2)
-                q[2 * r + 1, 2 * c + 1] = bool(v & 1)
-        return q
+                px[16 * r:16 * r + 16, 16 * c:16 * c + 16] = tile_mask(int(self.collision[r, c]))
+        return px
+
+
+# Special collision values $10-$1f: an 8-bit mask over 2-pixel columns (values $10-$17) or rows ($18-$1f).
+# This is the table Link's collision uses (@specialCollisions under checkTileCollision_allowHoles, bank0.s).
+SPECIAL_MASKS = [0b00000000, 0b11000011, 0b00000011, 0b11000000, 0b00000000, 0b11000011, 0b11000011, 0b00000000,
+                 0b00000000, 0b11000011, 0b00000011, 0b11000000, 0b11000000, 0b11000001, 0b11111111, 0b00000000]
+_MASK_CACHE: dict[int, np.ndarray] = {}
+
+
+def tile_mask(v: int) -> np.ndarray:
+    """16x16 bool solidity of one metatile with collision value v."""
+    m = _MASK_CACHE.get(v)
+    if m is not None:
+        return m
+    m = np.zeros((16, 16), bool)
+    if 0 < v < 0x10:  # quarter-tile bits: 8 = top-left, 4 = top-right, 2 = bottom-left, 1 = bottom-right
+        m[:8, :8], m[:8, 8:], m[8:, :8], m[8:, 8:] = bool(v & 8), bool(v & 4), bool(v & 2), bool(v & 1)
+    elif v >= 0x10:  # the game only looks at the low nibble: $ff (screen boundary) is free, $fe solid
+        bits = SPECIAL_MASKS[v & 0x0F]
+        solid = np.array([bool(bits & (1 << ((i >> 1) & 7))) for i in range(16)])
+        if v & 0x0F < 8:
+            m[:, solid] = True
+        else:
+            m[solid, :] = True
+    _MASK_CACHE[v] = m
+    return m
 
 
 def grid(e: Emu) -> Grid:
@@ -82,7 +104,11 @@ def grid(e: Emu) -> Grid:
                 k = "stairs"
             elif v == 0:
                 k = "free"
-            elif v == 0x0F or v >= 0x10:
+            elif v == 0x18:
+                k = "stairs"
+            elif 0x10 <= v < 0x20:
+                k = "free" if not tile_mask(v).any() else "partial"
+            elif v == 0x0F or v >= 0x20:
                 k = "solid"
             else:
                 k = "partial"
@@ -93,51 +119,115 @@ def grid(e: Emu) -> Grid:
 
 def blocked_pixels(g: Grid, allow: frozenset[str] = frozenset()) -> np.ndarray:
     """(16h, 16w) bool: pixels Link's box may not overlap."""
-    q = g.quarter_solid()
+    px = g.pixel_solid()
     for r in range(g.h):
         for c in range(g.w):
             k = g.kind[r][c]
+            tile = px[16 * r:16 * r + 16, 16 * c:16 * c + 16]
             if k.startswith("hazard:"):
-                q[2 * r:2 * r + 2, 2 * c:2 * c + 2] = k[7:] not in allow
+                tile[:] = k[7:] not in allow
             elif k.startswith("break:") and passable_break(k, allow):
-                q[2 * r:2 * r + 2, 2 * c:2 * c + 2] = False
+                tile[:] = False
             elif k == "warp" and "warp" not in allow:
-                q[2 * r:2 * r + 2, 2 * c:2 * c + 2] = True
-    return np.kron(q, np.ones((8, 8), bool))
+                tile[:] = True
+    return px
+
+
+def break_sources(kind: str) -> set[int]:
+    return {int(s) for s in kind[6:].split(",")}
+
+
+def breaker(kind: str, allow: frozenset[str]) -> str | None:
+    """The allowed ability that breaks this breakable tile kind, if any (sword preferred)."""
+    sources = break_sources(kind)
+    for ability in ("sword", "sword2", "shovel", "bracelet"):
+        if ability in allow and BREAK_SOURCES[ability] & sources:
+            return ability
+    return None
 
 
 def passable_break(kind: str, allow: frozenset[str]) -> bool:
-    sources = {int(s) for s in kind[6:].split(",")}
-    return ("sword" in allow and bool(sources & SWORD_SOURCES)) or ("bracelet" in allow and 0 in sources)
+    return breaker(kind, allow) is not None
 
 
-def link_positions(g: Grid, allow: frozenset[str] = frozenset(),
-                   blockers: list[tuple[int, int, int, int]] = ()) -> np.ndarray:
-    """(16h, 16w) bool: Link-center positions where his box overlaps no blocked pixel.
-    `blockers` are solid objects (y, x, ry, rx): Link can't get within |dy| < ry and |dx| < rx of them,
-    where ry/rx are the sums of both objects' collision radii (preventObjectHFromPassingObjectD)."""
-    px = blocked_pixels(g, allow)
+def _box_free(px: np.ndarray, box: tuple[tuple[int, int], tuple[int, int]]) -> np.ndarray:
+    """Centers (y, x) where the pixel box (y+dy0..y+dy1, x+dx0..x+dx1) contains no blocked pixel."""
+    (dy0, dy1), (dx0, dx1) = box
     H, W = px.shape
-    pad = np.ones((H + 16, W + 16), bool)  # outside the room counts as blocked
+    pad = np.zeros((H + 16, W + 16), bool)  # outside the room is free (screen boundary): edge zones stop Link
     pad[8:8 + H, 8:8 + W] = px
     s = np.zeros((H + 17, W + 17), np.int32)
     s[1:, 1:] = pad.cumsum(0).cumsum(1)
     ys, xs = np.mgrid[0:H, 0:W]
-    y0, y1 = ys + BOX_Y[0] + 8, ys + BOX_Y[1] + 8 + 1
-    x0, x1 = xs + BOX_X[0] + 8, xs + BOX_X[1] + 8 + 1
-    count = s[y1, x1] - s[y0, x1] - s[y1, x0] + s[y0, x0]
-    ok = count == 0
+    y0, y1 = ys + dy0 + 8, ys + dy1 + 8 + 1
+    x0, x1 = xs + dx0 + 8, xs + dx1 + 8 + 1
+    return (s[y1, x1] - s[y0, x1] - s[y1, x0] + s[y0, x0]) == 0
+
+
+@dataclass
+class Clearance:
+    """Where Link can move, per axis (his wall checks differ for vertical and horizontal movement)."""
+
+    h: np.ndarray  # (16h, 16w) bool: Link at (y, x) can move left/right
+    v: np.ndarray  # can move up/down
+
+    @property
+    def ok(self) -> np.ndarray:
+        return self.h | self.v
+
+    def can_move(self, p: tuple[int, int], n: tuple[int, int]) -> bool:
+        H, W = self.h.shape
+        if not (0 <= n[0] < H and 0 <= n[1] < W):
+            return False
+        dy, dx = n[0] - p[0], n[1] - p[1]
+        if dy and dx:
+            return all(self.h[q] and self.v[q] for q in (p, n, (n[0], p[1]), (p[0], n[1])))
+        grid = self.v if dy else self.h
+        return bool(grid[p] and grid[n])
+
+
+def clearance(g: Grid, allow: frozenset[str] = frozenset(), blockers: list[tuple[int, int, int, int]] = ()) -> Clearance:
+    """`blockers` are solid objects (y, x, ry, rx): Link can't get within |dy| < ry and |dx| < rx of them,
+    where ry/rx are the sums of both objects' collision radii (preventObjectHFromPassingObjectD)."""
+    px = blocked_pixels(g, allow)
+    c = Clearance(_box_free(px, H_BOX), _box_free(px, V_BOX))
     for by, bx, ry, rx in blockers:
-        ok[max(0, by - ry + 1):max(0, by + ry), max(0, bx - rx + 1):max(0, bx + rx)] = False
-    return ok
+        for m in (c.h, c.v):
+            m[max(0, by - ry + 1):max(0, by + ry), max(0, bx - rx + 1):max(0, bx + rx)] = False
+    return c
+
+
+def edge_zone(direction: str, H: int, W: int):
+    """Positions where moving toward `direction` scrolls to the next screen (bank1.s screen transitions:
+    y <= 5 / x <= 5, or beyond wScreenTransitionBoundaryY/X = H-7 / W-6)."""
+    return {"up": lambda y, x: y <= 5, "down": lambda y, x: y >= H - 6,
+            "left": lambda y, x: x <= 5, "right": lambda y, x: x >= W - 5}[direction]
+
+
+def exclude_edges(cl: Clearance, exits: frozenset[str]) -> None:
+    """Keep the planner out of edge zones it isn't meant to leave through."""
+    H, W = cl.h.shape
+    for d in ("up", "down", "left", "right"):
+        if d in exits:
+            continue
+        zone = {"up": (slice(0, 6), slice(None)), "down": (slice(H - 6, H), slice(None)),
+                "left": (slice(None), slice(0, 6)), "right": (slice(None), slice(W - 5, W))}[d]
+        cl.h[zone] = False
+        cl.v[zone] = False
+
+
+MOVES = ((-STEP, 0), (STEP, 0), (0, -STEP), (0, STEP), (-STEP, -STEP), (-STEP, STEP), (STEP, -STEP), (STEP, STEP))
 
 
 def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozenset(),
-         avoid: list[tuple[int, int, int]] = (), blockers: list[tuple[int, int, int, int]] = ()) -> list[tuple[int, int]] | None:
+         avoid: list[tuple[int, int, int]] = (), blockers: list[tuple[int, int, int, int]] = (),
+         exits: frozenset[str] = frozenset()) -> list[tuple[int, int]] | None:
     """A* over Link-center positions on a STEP lattice. `goal(y, x) -> bool` or a (y, x) target.
-    `avoid` = [(y, x, radius)] areas with extra cost (enemies); `blockers` = solid NPC centers.
-    Returns lattice waypoints after the start."""
-    ok = link_positions(g, allow, blockers)
+    `avoid` = [(y, x, radius)] areas with extra cost (enemies); `blockers` = solid NPC centers;
+    `exits` = screen edges the path may enter (all others are avoided). Returns lattice waypoints."""
+    cl = clearance(g, allow, blockers)
+    exclude_edges(cl, exits)
+    ok = cl.ok
     H, W = ok.shape
     if callable(goal):
         is_goal, target = goal, None
@@ -150,7 +240,15 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
 
     sy, sx = snap(start[0]), snap(start[1])
     starts = [(sy + dy, sx + dx) for dy in (0, -STEP, STEP) for dx in (0, -STEP, STEP)]
-    starts = [p for p in starts if 0 <= p[0] < H and 0 <= p[1] < W and ok[p]] or [(sy, sx)]
+    starts = [p for p in starts if 0 <= p[0] < H and 0 <= p[1] < W and ok[p]]
+    if not starts:
+        # Link stands somewhere the planner considers blocked (on the warp he arrived through, against an
+        # NPC...): start from the nearest free node instead.
+        near = [(abs(dy) + abs(dx), (sy + dy, sx + dx)) for dy in range(-24, 25, STEP) for dx in range(-24, 25, STEP)
+                if 0 <= sy + dy < H and 0 <= sx + dx < W and ok[sy + dy, sx + dx]]
+        if not near:
+            return None
+        starts = [min(near)[1]]
 
     def h(y: int, x: int) -> float:
         if target is None:
@@ -176,11 +274,9 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
                 p = came[p]
             return out[::-1]
         y, x = p
-        for dy, dx in ((-STEP, 0), (STEP, 0), (0, -STEP), (0, STEP), (-STEP, -STEP), (-STEP, STEP), (STEP, -STEP), (STEP, STEP)):
+        for dy, dx in MOVES:
             n = (y + dy, x + dx)
-            if not (0 <= n[0] < H and 0 <= n[1] < W and ok[n]):
-                continue
-            if dy and dx and not (ok[y + dy, x] and ok[y, x + dx]):
+            if not cl.can_move(p, n):
                 continue
             nc = c + (math.sqrt(2) if dy and dx else 1.0) + extra(*n)
             if nc < cost.get(n, math.inf):
@@ -200,9 +296,10 @@ def blockers(e: Emu) -> list[tuple[int, int, int, int]]:
     out = []
     for o in ram.objects(e, "interaction"):
         ry, rx = o.rad_y + ly, o.rad_x + lx
-        # Objects with enabled bit 7 (followers like Impa, effects like floating notes) aren't solid, and
-        # neither is anything Link already overlaps.
-        if o.visible and not o.enabled & 0x80 and not (abs(o.y - y) < ry and abs(o.x - x) < rx):
+        # Solid NPCs have collision radii (set by their script's initcollisions). Followers that persist
+        # across screens (enabled & 3 == 3, like Impa) aren't solid, nor is anything Link already overlaps.
+        solid = o.visible and (o.rad_y or o.rad_x) and o.enabled & 3 != 3
+        if solid and not (abs(o.y - y) < ry and abs(o.x - x) < rx):
             out.append((o.y, o.x, ry, rx))
     return out
 

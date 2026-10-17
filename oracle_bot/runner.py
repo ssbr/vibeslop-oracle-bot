@@ -163,9 +163,14 @@ class Runner:
             raise Failed(f"mark {mark.name}: state looks wrong: {problems}")
         if self.cfg.export_rupees is not None:
             ram.poke(e, "wNumRupees", ram.to_bcd(self.cfg.export_rupees, 2), "rupees")
+        # A loaded save resumes at wDeathRespawnBuffer (normally the last door Link used): point it here.
+        g, r = ram.room(e)
+        y, x = ram.link_px(e)
+        respawn = bytes([g, r, ram.u8(e, "wRoomStateModifier"), ram.u8(e, "w1Link.direction"), y, x])
+        ram.poke(e, "wDeathRespawnBuffer", respawn, "respawn")
         menus.save_game(e)
         sram = e.sram()
-        sav_problems = validate_sav(sram)
+        sav_problems = validate_sav(sram) or boot_check(sram, (g, r), (y, x))
         if sav_problems:
             raise Failed(f"mark {mark.name}: exported save invalid: {sav_problems}")
         d = self.run_dir / "checkpoints" / mark.name
@@ -185,6 +190,21 @@ class Runner:
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
         e.log.save(d / "replay.log")
         print(f"  checkpoint -> {d}", flush=True)
+
+
+def boot_check(sram: bytes, room: tuple[int, int], pos: tuple[int, int]) -> list[str]:
+    """Load the exported save in a fresh emulator and check Link appears where the checkpoint was taken."""
+    e = Emu(sram=sram)
+    try:
+        menus.load_game(e)
+    except Stuck as err:
+        return [f"boot: {err}"]
+    finally:
+        e.close()
+    got_room, got_pos = ram.room(e), ram.link_px(e)
+    if got_room != room or abs(got_pos[0] - pos[0]) + abs(got_pos[1] - pos[1]) > 4:
+        return [f"boot: loads at {got_room} {got_pos}, expected {room} {pos}"]
+    return []
 
 
 def promote(run_dir: Path, dest: Path) -> None:

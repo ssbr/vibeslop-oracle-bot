@@ -75,22 +75,16 @@ def cmd_verify(args) -> int:
 
 def cmd_boot_sav(args) -> int:
     from . import menus, ram
-    from .act import tap, wait_until
 
     sram = Path(args.sav).read_bytes()
     problems = validate_sav(sram)
     print("save slot 1:", "valid" if not problems else problems)
     e = Emu(sram=sram)
-    e.step(400)
-    tap(e, "start", after=120)
-    tap(e, "start", after=120)
-    tap(e, "a", after=90)  # file 1 -> continue
-    wait_until(e, lambda e: ram.controllable(e), 1200, "game to load")
+    menus.load_game(e)
     print(ram.summary(e))
     png = Path(args.sav).with_name("boot.png")
     Image.fromarray(e.screen()).resize((320, 288), Image.NEAREST).save(png)
     print(f"screenshot: {png}")
-    del menus
     return 0
 
 
