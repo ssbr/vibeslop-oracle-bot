@@ -533,32 +533,75 @@ def push_tile(e: Emu, tile: tuple[int, int], direction: str, max_frames: int = 9
 INTERAC_PUSHBLOCK = 0x14
 
 
+# Enemy objects that aren't foes (constants/common/enemies.s).
+NOT_FOES = {ram.CONST["ENEMY_ITEM_DROP_PRODUCER"]}
+
+
+def foes_in_room(e: Emu) -> list[ram.Obj]:
+    return [o for o in ram.objects(e, "enemy") if o.id not in NOT_FOES]
+
+
 def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None = None) -> None:
     """Attack the nearest enemy with the sword until none remain (or `done`)."""
-    done = done or (lambda e: not [o for o in ram.objects(e, "enemy") if o.visible])
+    clear_since = [None]
+
+    def room_clear(e: Emu) -> bool:
+        # Enemies can briefly vanish (Zols splitting into Gels, spawn puffs): require 30 quiet frames.
+        if foes_in_room(e):
+            clear_since[0] = None
+            return False
+        if clear_since[0] is None:
+            clear_since[0] = e.frame
+        return e.frame - clear_since[0] >= 30
+
+    done = done or room_clear
     start = e.frame
+    stall = 0
+    last_frame = -1
     while not done(e):
+        if e.frame == last_frame:  # every pass must advance the game (walk_to may return at once)
+            e.step()
+        last_frame = e.frame
         if e.frame - start > max_frames:
             raise Stuck(f"fight: enemies remain after {max_frames} frames: {ram.objects(e, 'enemy')}")
         if not ram.controllable(e):
             settle(e)
             continue
         y, x = ram.link_px(e)
-        foes = [o for o in ram.objects(e, "enemy") if o.visible]
+        enemies = foes_in_room(e)
+        foes = [o for o in enemies if o.visible]
         if not foes:
-            e.step()
+            if not enemies:
+                e.step()
+                continue
+            # Only hidden ones left (Zols in the floor etc.): walk up to one to make it come out.
+            lurker = min(enemies, key=lambda o: abs(o.y - y) + abs(o.x - x))
+            try:
+                walk_to(e, lambda py, px: abs(py - lurker.y) + abs(px - lurker.x) <= 12, max_frames=120)
+            except Stuck:
+                e.step(8)
             continue
         foe = min(foes, key=lambda o: abs(o.y - y) + abs(o.x - x))
         dy, dx = foe.y - y, foe.x - x
         if abs(dy) + abs(dx) <= 18 and min(abs(dy), abs(dx)) <= 8:
             slash(e, ("down" if dy > 0 else "up") if abs(dy) > abs(dx) else ("right" if dx > 0 else "left"))
+            stall = 0
             continue
-        # Line up with the enemy on whichever axis is closer, then close in.
-        try:
-            walk_to(e, lambda py, px, foe=foe: abs(py - foe.y) + abs(px - foe.x) <= 16
-                    and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=40)
-        except Stuck:
-            e.step(4)
+        # Chase: steer straight at the nearest spot beside the enemy (cheap, re-aimed every frame); only plan
+        # around walls when that stops making progress.
+        spot = min(((foe.y + oy, foe.x + ox) for oy, ox in ((14, 0), (-14, 0), (0, 14), (0, -14))),
+                   key=lambda q: abs(q[0] - y) + abs(q[1] - x))
+        e.set_buttons(_mask(steer(spot[0] - y, spot[1] - x)))
+        e.step()
+        e.set_buttons(0)
+        stall = stall + 1 if ram.link_px(e) == (y, x) else 0
+        if stall >= 10:
+            stall = 0
+            try:
+                walk_to(e, lambda py, px, foe=foe: abs(py - foe.y) + abs(px - foe.x) <= 16
+                        and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=60)
+            except Stuck:
+                e.step(4)
 
 
 def open_chest(e: Emu, tile: tuple[int, int], max_frames: int = 600) -> None:
@@ -608,3 +651,43 @@ def wait_seeds_done(e: Emu, max_frames: int = 300) -> None:
     they finish burning."""
     lo, hi = ram.CONST["ITEM_EMBER_SEED"], ram.CONST["ITEM_MYSTERY_SEED"]
     wait_until(e, lambda e: not any(lo <= o.id <= hi for o in ram.objects(e, "item")), max_frames, "seed to burn out")
+
+
+INTERAC_MOVING_PLATFORM = 0x79
+
+
+def ride_platform(e: Emu, board: tuple[int, int], alight: tuple[int, int], axis: str = "x",
+                  max_frames: int = 1200) -> None:
+    """Cross a pit on a moving platform that travels along `axis` ("x" = horizontally): wait at `board` (floor
+    next to the pit) until the platform lines up, step on, ride until lined up with `alight`, step off there."""
+    along = 1 if axis == "x" else 0  # coordinate index the platform moves along
+    across = 1 - along
+
+    def platform() -> ram.Obj | None:
+        return next((o for o in ram.objects(e, "interaction") if o.id == INTERAC_MOVING_PLATFORM), None)
+
+    def step_dir(delta: int) -> str:
+        return ("down" if delta > 0 else "up") if across == 0 else ("right" if delta > 0 else "left")
+
+    walk_to(e, board, tol=1)
+    wait_until(e, lambda e: (p := platform()) is not None and abs((p.y, p.x)[along] - board[along]) <= 1,
+               max_frames, "platform to arrive")
+    p = platform()
+    hold(e, step_dir((p.y, p.x)[across] - board[across]), abs((p.y, p.x)[across] - board[across]))
+    wait_until(e, lambda e: abs(ram.link_px(e)[along] - alight[along]) <= 4, max_frames, "platform to carry Link")
+    e.set_buttons(mask_of(step_dir(alight[across] - ram.link_px(e)[across])))
+    try:
+        wait_until(e, lambda e: abs(ram.link_px(e)[across] - alight[across]) <= 2, 120, "stepping off the platform")
+    finally:
+        e.set_buttons(0)
+    if ram.u8(e, "w1Link.state") != 1:
+        raise Stuck("fell off the platform")
+
+
+def hold_until(e: Emu, buttons: str, pred: Callable[[Emu], bool], max_frames: int = 600, what: str = "") -> None:
+    """Hold `buttons` until pred(e) (for sidescrolling sections and other places without path planning)."""
+    e.set_buttons(mask_of(buttons))
+    try:
+        wait_until(e, pred, max_frames, what or f"holding {buttons}")
+    finally:
+        e.set_buttons(0)

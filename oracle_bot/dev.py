@@ -63,3 +63,12 @@ def render_room(e: Emu, path: str | Path, scale: int = 2) -> None:
         full[cy:cy + 128, cx:cx + 160] = e.screen()[16:144]
     e.load(*st)
     Image.fromarray(full).resize((W * scale, H * scale), Image.NEAREST).save(ROOT / path)
+
+
+def report(e: Emu, name: str = "room") -> str:
+    """Summary, ASCII map, non-trivial tiles and a whole-room render at runs/dev/<name>.png."""
+    g = nav.grid(e)
+    special = [f"{r:x},{c:x}:{g.kind[r][c]}:{int(g.tiles[r, c]):02x}" for r in range(g.h) for c in range(g.w)
+               if g.kind[r][c] not in ("free", "solid", "partial") and not g.kind[r][c].startswith("cliff")]
+    render_room(e, f"runs/dev/{name}.png")
+    return ram.summary(e) + "\n" + nav.ascii(e, g) + "\n" + " ".join(special)
