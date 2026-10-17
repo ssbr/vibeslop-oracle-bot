@@ -92,6 +92,8 @@ def abilities(e: Emu) -> frozenset[str]:
         out.add("ember")
     if ram.has(e, "FEATHER"):
         out.add("feather")
+    if ram.has(e, "FLIPPERS"):
+        out.add("water")  # (not "seawater": the open sea needs the Mermaid Suit)
     return frozenset(out)
 
 
@@ -316,6 +318,13 @@ def hit_tile(e: Emu, tile: tuple[int, int], how: str, allow: frozenset[str]) -> 
     raise Stuck(f"can't break {tile} with {how}")
 
 
+SWIM_REACH, SWIM_LOOKAHEAD = 6, 3  # px, path nodes
+
+
+def _delta(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    return b[0] - a[0], b[1] - a[1]
+
+
 def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max_frames: int = 1800,
             settle_text: bool = True, leave_ok: bool = False, stop_on_scene: bool = False,
             exits: frozenset[str] = frozenset()) -> None:
@@ -399,10 +408,18 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
                     anchor, anchor_frame = pos, e.frame
                 if replans > 6:
                     raise Stuck(f"walk_to: no progress at {pos}\n{nav.ascii(e, g)}")
-            # drop reached waypoints; steer toward the next one (or the exact target at the end)
-            while len(plan) > 1 and abs(plan[0][0] - pos[0]) <= 2 and abs(plan[0][1] - pos[1]) <= 2:
+            # Drop reached waypoints; steer toward the next one (or the exact target at the end). Swimming Link
+            # turns gradually (func_5933 in link.s), circling waypoints as close as these: aim further ahead
+            # along a straight stretch (not round corners, which he'd get caught on).
+            swimming = ram.u8(e, "wLinkSwimmingState") != 0
+            near = SWIM_REACH if swimming else 2
+            while len(plan) > 1 and abs(plan[0][0] - pos[0]) <= near and abs(plan[0][1] - pos[1]) <= near:
                 plan.pop(0)
-            wy, wx = plan[0]
+            k = 0
+            while swimming and k < min(SWIM_LOOKAHEAD, len(plan) - 1) and (
+                    k == 0 or _delta(plan[k], plan[k + 1]) == _delta(plan[0], plan[1])):
+                k += 1
+            wy, wx = plan[k]
             if len(plan) == 1 and target is not None:
                 wy, wx = target
             dy, dx = wy - pos[0], wx - pos[1]
@@ -1131,6 +1148,24 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
         if holding(e) or ram.u8(e, "wRoomLayout", r * 16 + c) != before:
             return d  # (an event the lift triggers can cut the lift animation short)
     raise Stuck(f"couldn't lift {tile}")
+
+
+def pull_lever(e: Emu, max_frames: int = 600) -> None:
+    """Grip the room's lever with the bracelet and pull it all the way out. Once let go it slides back by
+    itself over ~250 frames, and whatever it holds open closes again (object_code/ages/interactions/lever.s)."""
+    lever = next(o for o in ram.objects(e, "interaction")
+                 if o.id == ram.CONST["INTERAC_LEVER"] and not o.subid & 0x80)  # (bit 7: the extending arm)
+    pull = "up" if lever.subid & 1 else "down"
+    approach(e, lever, "u" if pull == "up" else "d")
+    button = ready(e, "BRACELET")
+    e.set_buttons(mask_of(button))
+    try:
+        wait_until(e, lambda e: ram.u8(e, "wLinkGrabState") & 0x40, 12, "grip on the lever")
+        e.set_buttons(mask_of(f"{button}+{pull}"))
+        # (subid bit 6 would make it wLever2PullDistance; bit 7 is set once fully pulled)
+        wait_until(e, lambda e: ram.u8(e, "wLever1PullDistance") & 0x80, max_frames, "lever pulled out")
+    finally:
+        e.set_buttons(0)
 
 
 def holding(e: Emu) -> bool:

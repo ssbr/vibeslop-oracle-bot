@@ -161,13 +161,14 @@ def _box_free(px: np.ndarray, box: tuple[tuple[int, int], tuple[int, int]]) -> n
     """Centers (y, x) where the pixel box (y+dy0..y+dy1, x+dx0..x+dx1) contains no blocked pixel."""
     (dy0, dy1), (dx0, dx1) = box
     H, W = px.shape
-    pad = np.zeros((H + 16, W + 16), bool)  # outside the room is free (screen boundary): edge zones stop Link
-    pad[8:8 + H, 8:8 + W] = px
-    s = np.zeros((H + 17, W + 17), np.int32)
+    m = max(map(abs, (dy0, dy1, dx0, dx1)))
+    pad = np.zeros((H + 2 * m, W + 2 * m), bool)  # outside the room is free (screen boundary): edge zones stop Link
+    pad[m:m + H, m:m + W] = px
+    s = np.zeros((H + 2 * m + 1, W + 2 * m + 1), np.int32)
     s[1:, 1:] = pad.cumsum(0).cumsum(1)
     ys, xs = np.mgrid[0:H, 0:W]
-    y0, y1 = ys + dy0 + 8, ys + dy1 + 8 + 1
-    x0, x1 = xs + dx0 + 8, xs + dx1 + 8 + 1
+    y0, y1 = ys + dy0 + m, ys + dy1 + m + 1
+    x0, x1 = xs + dx0 + m, xs + dx1 + m + 1
     return (s[y1, x1] - s[y0, x1] - s[y1, x0] + s[y0, x0]) == 0
 
 
@@ -331,6 +332,20 @@ def hop_between(g: Grid, a: tuple[int, int], b: tuple[int, int]) -> bool:
     return False
 
 
+BRINK = 6  # px of margin from hazards
+
+
+def brink_nodes(g: Grid, allow: frozenset[str]) -> np.ndarray:
+    """(16h, 16w) bool: Link's box would be within BRINK px of a hazard he can't enter."""
+    px = np.zeros((16 * g.h, 16 * g.w), bool)
+    for r in range(g.h):
+        for c in range(g.w):
+            k = g.kind[r][c]
+            px[16 * r:16 * r + 16, 16 * c:16 * c + 16] = k.startswith("hazard:") and k[7:] not in allow
+    box = ((BOX_Y[0] - BRINK, BOX_Y[1] + BRINK), (BOX_X[0] - BRINK, BOX_X[1] + BRINK))
+    return ~_box_free(px, box)
+
+
 def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozenset(),
          avoid: list[tuple[int, int, int]] = (), blockers: list[tuple[int, int, int, int]] = (),
          exits: frozenset[str] = frozenset(), unblock: frozenset[tuple[int, int]] = frozenset()
@@ -371,8 +386,12 @@ def path(g: Grid, start: tuple[int, int], goal, allow: frozenset[str] = frozense
         dy, dx = abs(y - target[0]) / STEP, abs(x - target[1]) / STEP
         return max(dy, dx) + (math.sqrt(2) - 1) * min(dy, dx)
 
+    # With enemies about, a hit can knock Link into a pit or water he's walking beside: keep clear where there's
+    # room.
+    brink = brink_nodes(g, allow) if avoid else np.zeros_like(ok)
+
     def extra(y: int, x: int) -> float:
-        return sum(4.0 for (ay, ax, rad) in avoid if abs(ay - y) < rad and abs(ax - x) < rad)
+        return sum(4.0 for (ay, ax, rad) in avoid if abs(ay - y) < rad and abs(ax - x) < rad) + float(brink[y, x])
 
     frontier = [(h(*p), 0.0, p) for p in starts]
     heapq.heapify(frontier)

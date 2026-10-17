@@ -63,7 +63,10 @@ def room(e: Emu) -> tuple[int, int]:
 
 
 def link_px(e: Emu) -> tuple[int, int]:
-    """Link's (y, x) in pixels, room coordinates."""
+    """Link's (y, x) in pixels, room coordinates. Riding an animal it's the animal's: the game moves and collides
+    it, with Link drawn ~15px higher on its back."""
+    if u8(e, "wLinkObjectIndex") == 0xD1 and not riding_cart(e):
+        return u8(e, "w1Companion.yh"), u8(e, "w1Companion.xh")
     return u8(e, "w1Link.yh"), u8(e, "w1Link.xh")
 
 
