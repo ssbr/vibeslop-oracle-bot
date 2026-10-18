@@ -63,7 +63,7 @@ class Log:
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(self.text())
+        tmp.write_text(self.text(), newline="\n")
         tmp.replace(path)
 
     @classmethod

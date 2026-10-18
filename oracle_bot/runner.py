@@ -190,7 +190,7 @@ class Runner:
                         "rupees": ram.rupees(e), "name": ram.name(e),
                         "items": [k[9:] for k, v in ram.TREASURES.items() if v and ram.has(e, k)]},
         }
-        (d / "meta.json").write_text(json.dumps(meta, indent=2))
+        (d / "meta.json").write_text(json.dumps(meta, indent=2), newline="\n")
         e.log.save(d / "replay.log")
         print(f"  checkpoint -> {d}", flush=True)
 
