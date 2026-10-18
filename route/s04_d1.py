@@ -13,13 +13,11 @@ Optional chests (map, compass, rings, gasha seed, 30 rupees) are skipped.
 from oracle_bot import act, bosses, ram
 from oracle_bot.runner import Route
 
+from .common import item_taken
+
 R = Route()
 
 D1 = 1
-
-
-def room_item_taken(room: int):
-    return lambda e: ram.room_flag(e, 4, room, 0x20)
 
 
 @R.step(done=lambda e: ram.dungeon(e) == D1 or ram.essences(e) >= 1)
@@ -27,7 +25,7 @@ def enter_d1(e):
     act.enter(e, (2, 6), "up")
 
 
-@R.step(done=room_item_taken(0x1E), note="25 Zols; 20 cube rolled up 3x between the torches (blue) opens both "
+@R.step(done=item_taken(4, 0x1E), note="25 Zols; 20 cube rolled up 3x between the torches (blue) opens both "
         "doors; 1e the Ghini drops a key")
 def d1_ghini_key(e):
     act.exit_room(e, "right")
@@ -44,17 +42,18 @@ def d1_ghini_key(e):
     act.pickup(e)
 
 
-@R.step(done=room_item_taken(0x1A), note="1d: block aside, key door north; 1a: block aside, chest")
+@R.step(done=item_taken(4, 0x1A), note="1d: block aside, key door north; 1a: block aside, chest")
 def d1_chest_key(e):
     act.exit_room(e, "left")
     act.push_tile(e, (5, 7), "left")
     act.unlock(e, (0, 7), "up")
     act.exit_room(e, "up")
+    act.fight(e)  # (Keese knock Link off the push)
     act.push_tile(e, (4, 9), "right")
     act.open_chest(e, (2, 12))
 
 
-@R.step(done=room_item_taken(0x16), note="19: open the maze; 16: blocks, both buttons, ride the platform to the chest")
+@R.step(done=item_taken(4, 0x16), note="19: open the maze; 16: blocks, both buttons, ride the platform to the chest")
 def d1_platform_key(e):
     act.exit_room(e, "left")
     act.push_tile(e, (7, 6), "down")

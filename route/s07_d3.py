@@ -6,9 +6,15 @@ from oracle_bot import act, cheats, ram
 from oracle_bot.config import DONATIONS
 from oracle_bot.runner import Route
 
-from .common import CFG, LYNNA_PORTAL, LYNNA_PORTAL_STAND, NAYRU_PORTAL
+from .common import CFG, LYNNA_PORTAL, LYNNA_PORTAL_STAND, NAYRU_PORTAL, item_taken
 
 R = Route()
+POE = ram.CONST["INTERAC_POE"]
+
+
+def trade_item(e) -> int | None:
+    """Which trading-sequence item Link holds (TRADEITEM_*), if any."""
+    return ram.u8(e, "wTradeItem") if ram.has(e, "TRADEITEM") else None
 MISC_1 = ram.CONST["INTERAC_MISCELLANEOUS_1"]  # (subids 0a-0c: the bombs, rope and flippers lying about)
 
 
@@ -90,6 +96,20 @@ def cheval_rope(e):
     act.exit_room(e, "down")
 
 
+@R.step(done=lambda e: ram.has(e, "TRADEITEM"),
+        note="trading sequence: the Poe in Yoll Graveyard (0:7c, behind a rock) talks, then waits in his tomb "
+        "(push the tombstone), then gives Link his clock back outside")
+def poe_clock(e):
+    act.travel_to(e, 0x7C, at=(40, 152))
+    act.talk(e, POE, quiet=30)
+    act.push_tile(e, (2, 5), "up")
+    act.enter(e, (2, 5), "up")
+    act.talk(e, POE, quiet=30)
+    act.enter(e, (6, 8), "down")
+    act.settle(e, quiet=30)
+    act.talk(e, POE, quiet=30)
+
+
 @R.step(done=lambda e: ram.gflag(e, "GAVE_ROPE_TO_RAFTON"),
         note="to the past by Nayru's portal; Rafton is in the west house of 1:a7 and wants the rope for his raft "
         "(Ralph turns up on the way out)")
@@ -101,6 +121,41 @@ def rafton_rope(e):
     act.talk(e, ram.CONST["INTERAC_RAFTON"], choices=[0], quiet=30)
     act.exit_room(e, "down")
     act.settle(e, quiet=60)
+
+
+@R.step(done=lambda e: (trade_item(e) or 0) >= ram.CONST["TRADEITEM_STATIONERY"],
+        note="past Lynna City: the postman (1:57's house) swaps the Poe Clock for stationery")
+def stationery(e):
+    act.travel_to(e, 0x57)
+    act.enter(e, (3, 6), "up")
+    act.talk(e, ram.CONST["INTERAC_POSTMAN"], choices=[0], quiet=30)
+    act.exit_room(e, "down")
+
+
+@R.step(done=lambda e: (trade_item(e) or 0) >= ram.CONST["TRADEITEM_STINK_BAG"],
+        note="the hand in 1:55's toilet comes out when Link stands by it; it swaps the stationery for a stink bag")
+def stink_bag(e):
+    act.travel_to(e, 0x55)
+    act.enter(e, (4, 1), "up")
+    act.walk_to(e, (100, 136), tol=2)
+    e.step(60)  # (the hand climbs out)
+    act.tap(e, "up", hold=6, after=2)
+    act.tap(e, "a", hold=1, after=4)
+    act.settle(e, [0], quiet=30)
+    act.exit_room(e, "down")
+
+
+@R.step(done=item_taken(5, 0xB1),
+        note="Deku Forest (1:91): burn the little tree in the north-west corner; its cave runs east to a heart "
+        "piece up some stairs (5:b1)")
+def heart_deku_cave(e):
+    act.travel_to(e, 0x91)
+    act.burn(e, (1, 1))
+    act.enter(e, (1, 1), "up")
+    act.exit_room(e, "right")
+    act.pickup(e)
+    act.exit_room(e, "left")
+    act.enter(e, (2, 2), "up")  # (the stairs back out)
 
 
 @R.step(done=lambda e: ram.has(e, "RICKY_GLOVES") or ram.u8(e, "wRickyState") & 0x20,
@@ -429,9 +484,9 @@ def throw_toward(direction: str):
     return throw
 
 
-def play_wild_tokay(e) -> None:
+def play_wild_tokay(e) -> bool:
     """Fetch meat and throw it (a throw only flies while Link is moving) across the fence, standing level with
-    where the next Tokay will be by then; lookahead picks the frame to throw on."""
+    where the next Tokay will be by then; lookahead picks the frame to throw on. Returns whether Link won."""
     while not e.u8(WILD_TOKAY_RESULT):
         if not act.holding(e):
             grab_meat(e)
@@ -451,11 +506,9 @@ def play_wild_tokay(e) -> None:
             o = target(e)
             return o is not None and ram.field(e, o, "var3c") != 0
 
-        if not act.lookahead(e, throw_toward(direction), hit, 45,
-                             lambda e: target(e) is not None and not e.u8(WILD_TOKAY_RESULT), max_frames=400):
-            raise act.Stuck(f"no throw reaches {t}")
-    if e.u8(WILD_TOKAY_RESULT) != 1:
-        raise act.Stuck("lost the Wild Tokay game")
+        act.lookahead(e, throw_toward(direction), hit, 45,
+                      lambda e: target(e) is not None and not e.u8(WILD_TOKAY_RESULT), max_frames=400)
+    return e.u8(WILD_TOKAY_RESULT) == 1
 
 
 SEEDLING_PLANTED = (1, 0xAC, 0x80)  # (room flag set once the Tokay plants it)
@@ -470,7 +523,13 @@ def wild_tokay(e):
     act.break_tile(e, (1, 1))
     act.enter(e, (1, 1), "up")
     act.talk(e, TOKAY, 0x0D, choices=[0, 0], quiet=1)
-    play_wild_tokay(e)
+    for _ in range(5):  # (each game's run of Tokays is random; three close together in a lane can beat Link)
+        if play_wild_tokay(e):
+            break
+        cheats.ensure_rupees(e, 10)  # "play again?" (it checks just before asking)
+        act.settle(e, [0], quiet=1)
+    else:
+        raise act.Stuck("lost the Wild Tokay game five times")
     act.settle(e, quiet=60)
 
 
@@ -509,6 +568,15 @@ def scent_seeds(e):
         e.step(10)
     if not ram.has(e, "SCENT_SEEDS"):
         raise act.Stuck("couldn't pick up a scent seed")
+
+
+@R.step(done=lambda e: (trade_item(e) or 0) >= ram.CONST["TRADEITEM_TASTY_MEAT"],
+        note="trading sequence: the cook in the present's beach hut (0:dd) swaps the stink bag for tasty meat")
+def tasty_meat(e):
+    act.travel_to(e, 0xDD)
+    act.enter(e, (2, 5), "up")
+    act.talk(e, TOKAY, 0x05, choices=[0], quiet=30)
+    act.exit_room(e, "down")
 
 
 @R.step(done=lambda e: ram.gflag(e, "BOUGHT_BRACELET_FROM_TOKAY") and ram.has(e, "SHIELD"),

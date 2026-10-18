@@ -3,6 +3,8 @@
 from oracle_bot import act, ram
 from oracle_bot.runner import Route
 
+from .common import item_taken
+
 R = Route()
 
 INTERAC_MAKU_TREE = 0x87
@@ -40,9 +42,15 @@ def get_shovel(e):
     act.talk(e, INTERAC_HARDHAT_WORKER, 0x00, quiet=60)
 
 
-@R.step(done=lambda e: ram.room(e) == (1, 0x48) and not ram.room_flag(e, 1, 0x48, 0), note="dig back out and walk to the village entrance")
-def to_maku_road(e):
+@R.step(done=item_taken(1, 0x86), note="dig back out of the tower; a heart piece lies behind the dirt by the gate (1:86)")
+def heart_black_tower(e):
     act.travel(e, "down", "down")  # digging through the rubble on the way out
+    act.travel_to(e, 0x86)
+    act.pickup(e)
+
+
+@R.step(done=lambda e: ram.room(e) == (1, 0x48) and not ram.room_flag(e, 1, 0x48, 0), note="walk to the village entrance")
+def to_maku_road(e):
     act.travel_to(e, 0x48)
     act.walk_to(e, (72, 24))  # digs the dirt in front of the Maku Road entrance at (2, 1)
     act.walk_to(e, (104, 72))  # checkpoint spot: a save made on the dug tiles respawns Link out of bounds

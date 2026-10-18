@@ -1,7 +1,10 @@
 # oracle_bot
 
-A PyBoy bot that plays The Legend of Zelda: Oracle of Ages (US) from a new game, keeping a deterministic replay
-log and release checkpoints (a PyBoy state plus a battery `.sav` for any emulator) before and after each dungeon.
+A PyBoy bot that plays The Legend of Zelda: Oracle of Ages (US) from a new game to the Moonlit Grotto (D3)
+entrance, keeping a deterministic replay log and release checkpoints (a PyBoy state plus a battery `.sav` for any
+emulator) before and after each dungeon. Along the way it picks up every heart piece reachable before D3 and takes
+the trading sequence as far as it goes before then (the Tasty Meat: the next trade is on the mainland, and
+Crescent Island has no way back until later).
 Design and status: [docs/PLAN.md](docs/PLAN.md).
 
 Needs the ROM at `roms/oracle_of_ages.gbc` and the disassembly at `vendor/oracles-disasm` (only to regenerate
@@ -29,7 +32,7 @@ Changing one only affects the game from the step that uses it, so re-run from th
 | Setting | Re-run with |
 |---|---|
 | `child_name` | `uv run obot run --from name_child` |
-| `donation` | from the donation step (after D2) |
+| `donation` | `uv run obot run --from doctor_donation` |
 | `file_name`, `stone_push`, `message_speed` | `uv run obot run` (from power-on) |
 
 ## Watching

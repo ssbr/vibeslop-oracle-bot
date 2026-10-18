@@ -314,7 +314,7 @@ def strike_at(e: Emu, tile: tuple[int, int], strike: Callable[[Emu, str], None],
     errors = []
     for _, d, y, x in sorted(spots)[:6]:
         try:
-            walk_to(e, (y, x), allow, tol=tol)
+            walk_to(e, (y, x), allow, tol=tol, max_frames=300)  # (a spot Link can't settle on: try the next)
         except Stuck as err:
             errors.append(f"{d}: {str(err).splitlines()[0]}")
             continue
@@ -383,6 +383,7 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
     no_path_waits = 0
     fought = False
     scene_frames = 0
+    last_pos = None
     try:
         while True:
             if e.frame > deadline:
@@ -413,6 +414,9 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
             pos = ram.link_px(e)
             if reached(*pos):
                 return
+            if last_pos and abs(pos[0] - last_pos[0]) + abs(pos[1] - last_pos[1]) > 24:
+                plan = []  # respawned (fell in a pit, knocked into water): the old waypoints lead back into it
+            last_pos = pos
             if anchor is None or abs(pos[0] - anchor[0]) + abs(pos[1] - anchor[1]) >= 4:
                 anchor, anchor_frame = pos, e.frame
             stalled = e.frame - anchor_frame > 16
@@ -613,7 +617,9 @@ def enter(e: Emu, tile: tuple[int, int], direction: str = "up", max_frames: int 
         break
     settle(e)
     (g0, r0), (g1, r1) = before, ram.room(e)
-    if g1 == g0 and abs(r1 - r0) in (1, 16):  # a screen edge, not the warp (knocked off course)
+    # Overworld rooms are numbered by screen position, so a neighbor means Link left by the screen edge (knocked
+    # off course), not through the warp. (Indoors, stairs often lead to the next room number.)
+    if g1 == g0 <= 1 and abs(r1 - r0) in (1, 16):
         raise Stuck(f"enter {tile}: left {g0}:{r0:02x} by its edge into {g1}:{r1:02x}")
 
 
@@ -907,7 +913,7 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
             # Only hidden ones left (Zols in the floor etc.): walk up to one to make it come out.
             lurker = min(enemies, key=lambda o: abs(o.y - y) + abs(o.x - x))
             try:
-                walk_to(e, lambda py, px: abs(py - lurker.y) + abs(px - lurker.x) <= 12, max_frames=120)
+                walk_to(e, lambda py, px: abs(py - lurker.y) + abs(px - lurker.x) <= 12, allow, max_frames=120)
             except Stuck:
                 e.step(8)
             continue
@@ -919,10 +925,12 @@ def fight(e: Emu, max_frames: int = 60 * 60, done: Callable[[Emu], bool] | None 
 
 class Chase:
     """Close in on an enemy and slash at it, one step per call. Steering straight at it never steps onto
-    `avoid` tiles (stairs, holes, water): near those it plans a path instead."""
+    `avoid` tiles (stairs, holes, water): near those it plans a path instead, one that breaks nothing (jars and
+    blocks may be part of the room's puzzle)."""
 
     def __init__(self, avoid: set[tuple[int, int]] = frozenset(), carts: list[tuple[int, int]] = ()):
         self.stall = 0
+        self.closest = (None, 0)  # (foe slot, nearest Link has got to its spot): jittering in place isn't progress
         self.avoid = avoid
         self.carts = carts  # bumping into a parked minecart boards it
 
@@ -946,13 +954,19 @@ class Chase:
             e.set_buttons(_mask(steer(sy, sx)))
             e.step()
             e.set_buttons(0)
-            self.stall = self.stall + 1 if ram.link_px(e) == (y, x) else 0
+            ny, nx = ram.link_px(e)
+            dist = abs(spot[0] - ny) + abs(spot[1] - nx)
+            slot, best = self.closest
+            if slot != foe.slot or dist < best:
+                self.closest, self.stall = (foe.slot, dist), 0
+            else:
+                self.stall += 1
         if self.stall >= 10:
-            self.stall = 0
+            self.stall, self.closest = 0, (None, 0)
             try:
                 # (long enough for detours, e.g. round by the stairs to an enemy below a ledge)
                 walk_to(e, lambda py, px: abs(py - foe.y) + abs(px - foe.x) <= 16
-                        and min(abs(py - foe.y), abs(px - foe.x)) <= 6, max_frames=300)
+                        and min(abs(py - foe.y), abs(px - foe.x)) <= 6, abilities(e) - BREAKERS, max_frames=300)
             except Stuck:
                 e.step(4)
 
@@ -1041,9 +1055,23 @@ def pickup(e: Emu, obj_id: int = INTERAC_TREASURE, max_frames: int = 600) -> Non
         return any(o.id == obj_id and o.z == 0 for o in ram.objects(e, "interaction"))
 
     wait_until(e, landed, max_frames, "item to appear and land")
-    obj = find(e, "interaction", obj_id)
-    walk_to(e, (obj.y, obj.x), tol=3, stop_on_scene=True, max_frames=max_frames)
+    slot = find(e, "interaction", obj_id).slot
+
+    def there(e: Emu) -> ram.Obj | None:
+        return next((o for o in ram.objects(e, "interaction") if o.slot == slot and o.id == obj_id), None)
+
+    for _ in range(3):  # (keys bounce after landing: walking onto one in the air doesn't take it)
+        obj = there(e)
+        if obj is None:
+            break
+        walk_to(e, (obj.y, obj.x), tol=3, stop_on_scene=True, max_frames=max_frames)
+        try:
+            wait_until(e, lambda e: there(e) is None or not ram.controllable(e), 60, "item to be taken")
+        except Stuck:
+            continue
     settle(e, quiet=30)
+    if there(e) is not None:
+        raise Stuck(f"pickup: {there(e)} still lying there")
 
 
 def burn(e: Emu, tile: tuple[int, int]) -> None:

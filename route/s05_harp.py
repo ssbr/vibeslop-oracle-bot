@@ -5,7 +5,7 @@ the Wing Dungeon open (Deku Forest, 1:83)."""
 from oracle_bot import act, cheats, menus, ram
 from oracle_bot.runner import Route
 
-from .common import CFG, NAYRU_PORTAL
+from .common import CFG, NAYRU_PORTAL, item_taken
 
 R = Route()
 
@@ -14,6 +14,12 @@ FAIRY_SPOTS = ((0x81, (2, 5)), (0x80, (5, 4)), (0x91, (3, 2)))  # rock (bracelet
 D2_DOOR = (2, 5)  # bombable cave door in 1:83 (TILEINDEX $d1)
 MENU_KID_NAME = 7  # wOpenedMenuType of Blossom's name entry
 GOT_AMBIS_BOMBS = "0b"  # GLOBALFLAG_0b: the palace guards then let Link pass freely
+
+
+@R.step(done=item_taken(0, 0x8B), note="Yoll Graveyard's south-west corner (0:8b): a heart piece behind a rock")
+def heart_graveyard(e):
+    act.travel_to(e, 0x8B)
+    act.pickup(e)
 
 
 @R.step(done=lambda e: ram.gflag(e, "FOREST_UNSCRAMBLED"),
@@ -95,6 +101,7 @@ def wooden_shield(e):
     act.travel_to(e, 0x70, at=(40, 120))
     act.enter(e, (2, 7), "up")
     act.exit_room(e, "right", span=(130, 156))
+    act.fight(e)  # (a Keese over the pits knocks Link into them)
     act.exit_room(e, "left", span=(16, 56))
     act.enter(e, (2, 2), "up")
     cheats.ensure_rupees(e, 10)

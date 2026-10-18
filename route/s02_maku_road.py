@@ -56,9 +56,14 @@ def maku_road_button_room(e):
     act.exit_room(e, "up")
 
 
-@R.step(done=lambda e: ram.room(e) == (1, 0x38), note="06: the lone block becomes pushable once the Stalfos die")
+@R.step(done=lambda e: ram.room(e) == (1, 0x38),
+        note="06: a heart piece behind two one-way blocks (up, then left); the lone block becomes pushable once "
+        "the Stalfos die")
 def maku_road_exit(e):
     act.fight(e)
+    act.push_tile(e, (5, 4), "up")
+    act.push_tile(e, (5, 5), "left")
+    act.pickup(e)
     act.wait_until(e, lambda e: ram.u8(e, "wRoomLayout", 7 * 16 + 10) == 0x1C, 300, "block to become pushable")
     act.push_tile(e, (7, 10), "up")
     act.exit_room(e, "right")

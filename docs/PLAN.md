@@ -188,14 +188,19 @@ with the configured donation, D3-entered room flag `$C966 & $10` clear.
   Continuous replay, render on/off and save→load-in-fresh-instance resume are all bit-exact, so states are
   usable for both dev and canonical runs.
 
-## Status (2026-10-17)
-- Route in `route/` runs headless from power-on to the bombed-open D2 entrance (`uv run obot run`), with release
-  checkpoints 01_before_maku_path, 02_after_maku_path, 03_before_d1, 04_after_d1, 05_before_d2 (each boot-checked
-  .sav). `uv run obot verify runs/main/replay.log` passes.
-- s05 (D1 -> D2): fairy hide-and-seek, D2 present entrance collapse, child named (config child_name), Harp + Tune
-  of Echoes, portal, Mystery Seeds via the Deku Forest caves, Wooden Shield (scrub, 10 rupees), Ambi's bombs.
-- Findings: bombs are lifted overhead when used (a second press sets them down; the blast only breaks tiles at
-  ground level); stairs/doors don't warp while Link carries something (wLinkGrabState $83); the Mystery Seed escort
-  can start in the forest (soldier subid $0a) as well as at the palace gate.
-- Next: D2 (Wing Dungeon: Spiked Beetles need the shield, sidescroll rooms, mine carts, Swoop, Roc's Feather, Head
-  Thwomp with bombs) -> 06_after_d2, the doctor donation, then D2 -> D3 (Crescent Island).
+## Status (2026-10-18)
+- The route runs headless from power-on to the Moonlit Grotto entrance (`uv run obot run`), with release
+  checkpoints 01_before_maku_path, 02_after_maku_path, 03_before_d1, 04_after_d1, 05_before_d2, 06_after_d2 and
+  07_before_d3 (each .sav boot-checked). `uv run obot verify` re-simulates the whole log (~293k frames) in ~100 s.
+- The route stops at 07_before_d3: the user never entered the Moonlit Grotto.
+- Extras the user asked for: every heart piece reachable before D3 (Black Tower 1:86, Maku Path 4:06, Yoll
+  Graveyard 0:8b, Deku Forest cave 5:b1; 3:af needs the Switch Hook, the rest the Tune of Currents or Mermaid Suit)
+  and the trading sequence as far as it goes before D3 (Poe Clock -> Stationery -> Stink Bag -> Tasty Meat; the
+  mask salesman is on the mainland, and Crescent Island's raft back only appears with Dimitri).
+- s07 (D2 -> D3): Cheval, the doctor donation, Moosh and Cheval's grave (flippers, rope), Rafton, Ricky's gloves,
+  Tingle's chart (riding Ricky), the raft and storm, then Crescent Island: the Tokay item hunt (trading hut swaps,
+  the dive under 5:cc, the side-view passage 7:06/7:07 to the harp plateau), vine sprouts, the Wild Tokay game
+  (closed-loop meat throwing), the Scent Tree, bracelet and shield bought back, and the 1:d9 portal to the grotto.
+- Navigation knows animals' and the raft's collision boxes, swimming drift, feather hops over pits/water, Ricky's
+  punch, one-way ledges in a room (not across screen edges: those are scripted), and falls back to a covering
+  survey tier when items are traded away.

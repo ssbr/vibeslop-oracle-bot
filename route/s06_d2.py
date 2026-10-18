@@ -15,14 +15,12 @@ Optional chests (map) are skipped.
 from oracle_bot import act, bosses, ram
 from oracle_bot.runner import Route
 
+from .common import item_taken
+
 R = Route()
 
 D2 = 2
 INTERAC_SIDESCROLL_PLATFORM = ram.CONST["INTERAC_MOVING_SIDESCROLL_PLATFORM"]
-
-
-def room_item_taken(room: int):
-    return lambda e: ram.room_flag(e, 4, room, 0x20)
 
 
 # --- side views: Link stands 7px above the surface he's on; moving platforms follow fixed scripts
@@ -112,7 +110,7 @@ def enter_d2(e):
     act.enter(e, (2, 5), "up")
 
 
-@R.step(done=room_item_taken(0x39),
+@R.step(done=item_taken(4, 0x39),
         note="44: Spiked Beetles (shield flips them); 43: cube right 3, down, left, up, left 6 onto (3,5); "
         "3f: push the right block of the three up; 3b, 3a west; 39: Keese and Pig Warriors drop a key")
 def d2_first_key(e):
@@ -129,7 +127,7 @@ def d2_first_key(e):
     act.pickup(e)
 
 
-@R.step(done=room_item_taken(0x48),
+@R.step(done=item_taken(4, 0x48),
         note="back through 3f (from above its blocks only open as: (8,3) down, (8,5) down, (8,4) left); key door "
         "44->45; 45: bomb the south wall; 47's stairs to the side views; 48: Ropes guard a chest")
 def d2_second_key(e):
@@ -203,7 +201,7 @@ def d2_feather(e):
 
 # Toggle tiles cycle red -> yellow -> blue -> red when Link jumps over their centers (landing elsewhere).
 
-@R.step(done=room_item_taken(0x30),
+@R.step(done=item_taken(4, 0x30),
         note="back down from the feather room; 32: jump twice over the toggle tile (yellow -> red) to open the "
         "east door; 33: hop to the cart, slash the switch below 2f's track so the cart stops in 2f; bomb east; "
         "30: enemies leave a key chest")
@@ -238,7 +236,7 @@ def d2_cart_switch_key(e):
     act.open_chest(e, (5, 7))
 
 
-@R.step(done=room_item_taken(0x2E),
+@R.step(done=item_taken(4, 0x2E),
         note="2f: the dice goes left, up, right, up onto its spot to open the gate; the cart rides to 2e; "
         "make the 2x2 toggle tiles yellow (left column) and blue (right column) for a key")
 def d2_toggle_key(e):
@@ -269,7 +267,7 @@ STATUE_PHASES = [
 ]
 
 
-@R.step(done=room_item_taken(0x42),
+@R.step(done=item_taken(4, 0x42),
         note="2d's north stairs; 35: key block, path to the cart; round through 34 to 35's south half and down "
         "into 3b, whose toggle tile turns blue (opening the cart's gate there); the cart runs to 41; 3c: lift the "
         "lower-right jar and push the upper one onto the switch; 3d -> 42: copy the block figure")
