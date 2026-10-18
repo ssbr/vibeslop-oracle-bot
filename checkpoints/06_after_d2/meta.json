@@ -1,0 +1,54 @@
+{
+  "name": "06_after_d2",
+  "frame": 185292,
+  "n_ops": 37325,
+  "mem_hash": "38fcaeb434157a6c0da5e32b",
+  "header": {
+    "rom_sha1": "880374fb978b18af4aa529e2e32f7ffb4d7dd2f4",
+    "pyboy": "2.8.1",
+    "cgb": "1",
+    "sound": "1",
+    "sram": "zero8k"
+  },
+  "config": {
+    "file_name": "Link",
+    "child_name": "Pip",
+    "donation": 150,
+    "stone_push": "right",
+    "message_speed": 3,
+    "cheat_health": true,
+    "cheat_ammo": true,
+    "export_rupees": null
+  },
+  "summary": {
+    "room": "1:83",
+    "hearts": "5/5",
+    "essences": 2,
+    "rupees": 12,
+    "name": "Link",
+    "items": [
+      "SHIELD",
+      "PUNCH",
+      "BOMBS",
+      "SWORD",
+      "HARP",
+      "SHOVEL",
+      "BRACELET",
+      "FEATHER",
+      "SEED_SATCHEL",
+      "EMBER_SEEDS",
+      "MYSTERY_SEEDS",
+      "TUNE_OF_ECHOES",
+      "RUPEES",
+      "HEART_REFILL",
+      "HEART_CONTAINER",
+      "HEART_PIECE",
+      "SMALL_KEY",
+      "BOSS_KEY",
+      "COMPASS",
+      "ESSENCE",
+      "FIRST_KEY",
+      "GRAVEYARD_KEY"
+    ]
+  }
+}

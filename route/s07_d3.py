@@ -449,7 +449,8 @@ def vine_sprouts(e):
 # screen (wTmpcfc0.wildTokay.cfde: 1 won, $ff lost; object_code/ages/interactions/tokay.s).
 MEAT = ram.CONST["INTERAC_TOKAY_MEAT"]
 WILD_TOKAY_RESULT = 0xCFDE
-LANES = {136: ("right", 107), 24: ("left", 52)}  # lane x -> (throw direction, Link's x against the fence)
+# lane x -> (throw direction, where Link throws from: a throw carries ~40px, landing in the lane's hit window)
+LANES = {136: ("right", 96), 24: ("left", 64)}
 
 
 def runners(e) -> list[ram.Obj]:
@@ -468,10 +469,16 @@ def grab_meat(e) -> None:
     act.wait_until(e, lambda e: meat_landed(e) or e.u8(WILD_TOKAY_RESULT), 300, "meat to land")
     if e.u8(WILD_TOKAY_RESULT):
         return
-    act.walk_to(e, (67, 80), tol=1)  # (it drops at (56, 80))
-    act.face(e, "up")
-    act.tap(e, "a", hold=2, after=4)
-    act.wait_until(e, act.holding, 30, "lifting the meat")
+    for _ in range(3):  # (a press during the end of a throw is ignored)
+        act.walk_to(e, (67, 80), tol=1)  # (it drops at (56, 80))
+        act.face(e, "up")
+        act.tap(e, "a", hold=2, after=4)
+        try:
+            act.wait_until(e, act.holding, 30, "lifting the meat")
+            return
+        except act.Stuck:
+            continue
+    raise act.Stuck("couldn't lift the meat")
 
 
 def throw_toward(direction: str):
@@ -497,7 +504,14 @@ def play_wild_tokay(e) -> bool:
             continue
         t = targets[0]
         direction, x = LANES[t.x]
-        act.walk_to(e, (max(40, min(100, (t.y + 8) % 256 - 8 + 28)), x), tol=1)
+        # Meet it where it'll be once Link has walked there (Tokays walk 0.5px/frame, Link 1) and the meat has
+        # flown to the lane (~20 frames).
+        y, lx = ram.link_px(e)
+        ty = (t.y + 8) % 256 - 8
+        meet = ty + 10
+        for _ in range(3):
+            meet = ty + 10 + (abs(meet - y) + abs(x - lx)) // 2
+        act.walk_to(e, (max(32, min(100, meet)), x), tol=1)
 
         def target(e, slot=t.slot):
             return next((o for o in ram.objects(e, "interaction") if o.slot == slot), None)
@@ -527,7 +541,7 @@ def wild_tokay(e):
         if play_wild_tokay(e):
             break
         cheats.ensure_rupees(e, 10)  # "play again?" (it checks just before asking)
-        act.settle(e, [0], quiet=1)
+        act.settle(e, [0], quiet=60)
     else:
         raise act.Stuck("lost the Wild Tokay game five times")
     act.settle(e, quiet=60)

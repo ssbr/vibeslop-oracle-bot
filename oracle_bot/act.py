@@ -526,6 +526,8 @@ def exit_room(e: Emu, direction: str, allow: frozenset[str] | None = None, expec
     g = nav.grid(e)
     edge = nav.edge_zone(direction, g.h * 16, g.w * 16)
     lo, hi = span or (0, 255)
+    if hi - lo >= 20:  # keep off the ends: the next screen may be walled just past them
+        lo, hi = lo + 6, hi - 6
     along = 1 if direction in ("up", "down") else 0
 
     def near(y: int, x: int) -> bool:

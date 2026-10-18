@@ -1,0 +1,58 @@
+{
+  "name": "07_before_d3",
+  "frame": 290042,
+  "n_ops": 58398,
+  "mem_hash": "cf3eaa1f9d59a12ec7f9ab7e",
+  "header": {
+    "rom_sha1": "880374fb978b18af4aa529e2e32f7ffb4d7dd2f4",
+    "pyboy": "2.8.1",
+    "cgb": "1",
+    "sound": "1",
+    "sram": "zero8k"
+  },
+  "config": {
+    "file_name": "Link",
+    "child_name": "Pip",
+    "donation": 150,
+    "stone_push": "right",
+    "message_speed": 3,
+    "cheat_health": true,
+    "cheat_ammo": true,
+    "export_rupees": null
+  },
+  "summary": {
+    "room": "0:ba",
+    "hearts": "6/6",
+    "essences": 2,
+    "rupees": 1,
+    "name": "Link",
+    "items": [
+      "SHIELD",
+      "PUNCH",
+      "BOMBS",
+      "SWORD",
+      "HARP",
+      "SHOVEL",
+      "BRACELET",
+      "FEATHER",
+      "SEED_SATCHEL",
+      "EMBER_SEEDS",
+      "SCENT_SEEDS",
+      "MYSTERY_SEEDS",
+      "TUNE_OF_ECHOES",
+      "RUPEES",
+      "HEART_REFILL",
+      "HEART_CONTAINER",
+      "HEART_PIECE",
+      "FLIPPERS",
+      "SMALL_KEY",
+      "BOSS_KEY",
+      "COMPASS",
+      "ESSENCE",
+      "TRADEITEM",
+      "FIRST_KEY",
+      "GRAVEYARD_KEY",
+      "ISLAND_CHART"
+    ]
+  }
+}

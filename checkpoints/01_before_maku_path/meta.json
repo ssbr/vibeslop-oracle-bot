@@ -1,0 +1,37 @@
+{
+  "name": "01_before_maku_path",
+  "frame": 30850,
+  "n_ops": 4341,
+  "mem_hash": "82201fb656316b3303aacf5e",
+  "header": {
+    "rom_sha1": "880374fb978b18af4aa529e2e32f7ffb4d7dd2f4",
+    "pyboy": "2.8.1",
+    "cgb": "1",
+    "sound": "1",
+    "sram": "zero8k"
+  },
+  "config": {
+    "file_name": "Link",
+    "child_name": "Pip",
+    "donation": 150,
+    "stone_push": "right",
+    "message_speed": 3,
+    "cheat_health": true,
+    "cheat_ammo": true,
+    "export_rupees": null
+  },
+  "summary": {
+    "room": "1:48",
+    "hearts": "3/3",
+    "essences": 0,
+    "rupees": 0,
+    "name": "Link",
+    "items": [
+      "PUNCH",
+      "SWORD",
+      "SHOVEL",
+      "HEART_REFILL",
+      "HEART_PIECE"
+    ]
+  }
+}
