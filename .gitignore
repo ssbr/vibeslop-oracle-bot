@@ -13,5 +13,3 @@ __pycache__/
 /checkpoints/**/*.pyboy
 /checkpoints/**/*.png
 /checkpoints/*/replay.log
-# Not yet.
-/README.md
