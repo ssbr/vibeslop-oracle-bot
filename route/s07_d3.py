@@ -316,6 +316,15 @@ def step_off_ladder(e) -> None:
         "up the ledges and back east along 7:07's top to its west ladder, up to 5:cd's west half, out; back by the "
         "one-way way 7:07 does go")
 def crescent_harp(e):
+    to_harp_plateau(e)
+    act.talk(e, TOKAY, 0x08, quiet=30)
+    leave_harp_plateau(e)
+
+
+def to_harp_plateau(e) -> None:
+    """From the past island to the plateau of the harp Tokay (1:da west): 1:db's cave (5:cd), a pot, stairs down
+    to side view 7:07, swim west into 7:06, up its ladder, onto the sliding block, feather up the ledges, back
+    east along 7:07's top to its west ladder, up into 5:cd's west half and out."""
     act.travel_to(e, 0xDB)
     act.fight(e)  # (Octoroks knock Link off the top edge)
     act.enter(e, (0, 1), "up")
@@ -344,8 +353,11 @@ def crescent_harp(e):
     act.climb(e, 88, "up", lambda e: ram.room(e)[0] != 7)
     act.settle(e, quiet=20)
     act.exit_room(e, "down", span=(48, 64))
-    act.talk(e, TOKAY, 0x08, quiet=30)
-    # Back the way 7:07 does go: its west ladder, down the gap into the water, east, up both ladders.
+
+
+def leave_harp_plateau(e) -> None:
+    """Back the way 7:07 does go: its west ladder, down the gap into the water, east, up both ladders, out of
+    5:cd's east half into 1:db."""
     act.enter(e, (0, 6), "up")
     act.enter(e, (4, 2), "up")
     act.hold_until(e, "down", lambda e: ram.u8(e, "wLinkInAir") == 0 and ram.link_px(e)[0] >= 40, 120, "down the ladder")
@@ -376,3 +388,160 @@ def vine_sprouts(e):
                 act.push_object(e, SPROUT, direction, kind="enemy")
                 act.wait_until(e, lambda e: (lambda o: o.y % 16 == 8 and o.x % 16 == 8)(act.find(e, "enemy", SPROUT)),
                                60, "the sprout to finish sliding")
+
+
+# Wild Tokay (2:de): Tokays run down the lanes outside the fences; each must catch meat before leaving the
+# screen (wTmpcfc0.wildTokay.cfde: 1 won, $ff lost; object_code/ages/interactions/tokay.s).
+MEAT = ram.CONST["INTERAC_TOKAY_MEAT"]
+WILD_TOKAY_RESULT = 0xCFDE
+LANES = {136: ("right", 107), 24: ("left", 52)}  # lane x -> (throw direction, Link's x against the fence)
+
+
+def runners(e) -> list[ram.Obj]:
+    """Wild Tokays on screen still without meat, the one nearest the bottom first."""
+    out = [o for o in ram.objects(e, "interaction") if o.id == TOKAY and o.subid == 0x0C and o.y < 0x90
+           and not ram.field(e, o, "var3c")]
+    return sorted(out, key=lambda o: -((o.y + 8) & 0xFF))
+
+
+def meat_landed(e) -> bool:
+    return any(o.id == MEAT and o.z == 0 and o.state == 1 and ram.field(e, o, "substate") == 2
+               for o in ram.objects(e, "interaction"))
+
+
+def grab_meat(e) -> None:
+    act.wait_until(e, lambda e: meat_landed(e) or e.u8(WILD_TOKAY_RESULT), 300, "meat to land")
+    if e.u8(WILD_TOKAY_RESULT):
+        return
+    act.walk_to(e, (67, 80), tol=1)  # (it drops at (56, 80))
+    act.face(e, "up")
+    act.tap(e, "a", hold=2, after=4)
+    act.wait_until(e, act.holding, 30, "lifting the meat")
+
+
+def throw_toward(direction: str):
+    def throw(e) -> None:
+        e.set_buttons(act.mask_of(direction))
+        e.step(2)
+        e.set_buttons(act.mask_of(direction + "+a"))
+        e.step(2)
+        e.set_buttons(0)
+    return throw
+
+
+def play_wild_tokay(e) -> None:
+    """Fetch meat and throw it (a throw only flies while Link is moving) across the fence, standing level with
+    where the next Tokay will be by then; lookahead picks the frame to throw on."""
+    while not e.u8(WILD_TOKAY_RESULT):
+        if not act.holding(e):
+            grab_meat(e)
+            continue
+        targets = runners(e)
+        if not targets:
+            e.step()
+            continue
+        t = targets[0]
+        direction, x = LANES[t.x]
+        act.walk_to(e, (max(40, min(100, (t.y + 8) % 256 - 8 + 28)), x), tol=1)
+
+        def target(e, slot=t.slot):
+            return next((o for o in ram.objects(e, "interaction") if o.slot == slot), None)
+
+        def hit(e) -> bool:
+            o = target(e)
+            return o is not None and ram.field(e, o, "var3c") != 0
+
+        if not act.lookahead(e, throw_toward(direction), hit, 45,
+                             lambda e: target(e) is not None and not e.u8(WILD_TOKAY_RESULT), max_frames=400):
+            raise act.Stuck(f"no throw reaches {t}")
+    if e.u8(WILD_TOKAY_RESULT) != 1:
+        raise act.Stuck("lost the Wild Tokay game")
+
+
+SEEDLING_PLANTED = (1, 0xAC, 0x80)  # (room flag set once the Tokay plants it)
+
+
+@R.step(done=lambda e: ram.has(e, "SCENT_SEEDLING") or ram.room_flag(e, *SEEDLING_PLANTED),
+        note="1:bd's bombable north-west wall: the Wild Tokay game (10 rupees, bracelet needed) pays a Scent "
+        "Seedling")
+def wild_tokay(e):
+    cheats.ensure_rupees(e, 10)  # (the game checks before Link speaks)
+    act.travel_to(e, 0xBD)
+    act.break_tile(e, (1, 1))
+    act.enter(e, (1, 1), "up")
+    act.talk(e, TOKAY, 0x0D, choices=[0, 0], quiet=1)
+    play_wild_tokay(e)
+    act.settle(e, quiet=60)
+
+
+@R.step(done=lambda e: ram.room_flag(e, *SEEDLING_PLANTED),
+        note="the Tokay on the north shore (1:ac, round by its west side) plants the seedling")
+def plant_seedling(e):
+    act.exit_room(e, "down")
+    act.travel_to(e, 0xAC, at=(56, 56))
+    act.talk(e, TOKAY, 0x11, quiet=30)
+
+
+CUCCO_PORTAL, CUCCO_PORTAL_PRESENT = (72, 88), (40, 104)  # 1:cd and 0:cd
+TREE_SEED = ram.CONST["PART_SEED_ON_TREE"]
+
+
+@R.step(done=lambda e: ram.has(e, "SCENT_SEEDS"),
+        note="the Cucco hut's portal to the present; up the vines to the grown Scent Tree (0:ac): a slash drops "
+        "seeds (owned, the ammo cheat keeps the satchel full)")
+def scent_seeds(e):
+    act.travel_to(e, 0xCD, at=(88, 104))
+    act.time_portal(e, CUCCO_PORTAL, stand=(104, 88))
+    act.travel_to(e, 0xAC, at=(88, 24))
+    act.walk_to(e, (72, 40), tol=1)
+    act.slash(e, "right")
+    act.wait_until(e, lambda e: any(o.id == TREE_SEED for o in ram.objects(e, "part")), 60, "seeds to drop")
+    for _ in range(6):
+        if ram.has(e, "SCENT_SEEDS"):
+            break
+        y, x = ram.link_px(e)
+        for d in sorted((o for o in ram.objects(e, "part") if o.id == TREE_SEED), key=lambda o: abs(o.y - y) + abs(o.x - x)):
+            try:  # (some land on the tree itself)
+                act.walk_to(e, lambda py, px, d=d: abs(py - d.y) <= 6 and abs(px - d.x) <= 6, max_frames=120)
+                break
+            except act.Stuck:
+                continue
+        e.step(10)
+    if not ram.has(e, "SCENT_SEEDS"):
+        raise act.Stuck("couldn't pick up a scent seed")
+
+
+@R.step(done=lambda e: ram.gflag(e, "BOUGHT_BRACELET_FROM_TOKAY") and ram.has(e, "SHIELD"),
+        note="back to the past; at the hut, hand back the traded bracelet for the shovel, then buy the bracelet "
+        "(10 scent seeds); back in, the wooden shield (10 more)")
+def bracelet_and_shield(e):
+    act.travel_to(e, 0xCD)
+    act.time_portal(e, CUCCO_PORTAL_PRESENT, stand=(72, 104))
+    act.travel_to(e, 0xAD)
+    act.enter(e, (1, 5), "up")
+    act.talk(e, SHOP_ITEM, 3, choices=[0], sides="d", quiet=30)  # (subid 3: the shovel, in the bracelet's place)
+    act.talk(e, SHOP_ITEM, SHOP_BRACELET, choices=[0], sides="d", quiet=30)
+    act.exit_room(e, "down")
+    act.enter(e, (1, 5), "up")
+    shield = next(o for o in ram.objects(e, "interaction") if o.id == SHOP_ITEM)
+    act.talk(e, SHOP_ITEM, shield.subid, choices=[0], sides="d", quiet=30)
+    act.exit_room(e, "down")
+
+
+D9_PORTAL = (24, 136)  # 1:d9, on the harp plateau
+
+
+@R.step(done=lambda e: ram.room(e) == (0, 0xBA),
+        note="the Moonlit Grotto is in the present (0:ba): up to the harp plateau again, its portal (1:d9) to "
+        "the present, then north to the entrance")
+def to_moonlit_grotto(e):
+    to_harp_plateau(e)
+    act.travel_to(e, 0xD9, at=(24, 104))
+    act.time_portal(e, D9_PORTAL, stand=(24, 104))
+    act.travel_to(e, 0xBA, at=(104, 88))
+    act.walk_to(e, (104, 88))
+
+
+R.mark("07_before_d3", release=True,
+       expect=lambda e: ram.essences(e) == 2 and ram.u8(e, "wc6e2") & 2 and ram.has(e, "SHIELD")
+       and ram.has(e, "HARP") and ram.has(e, "SHOVEL") and ram.gflag(e, "BOUGHT_BRACELET_FROM_TOKAY"))
