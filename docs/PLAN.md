@@ -42,7 +42,7 @@ Starting point:
 pyproject.toml   # pyboy==2.8.1 (pinned: save states/replays are version-bound), numpy, pillow; extra [llm]: anthropic
 config.toml      # player names/choices, cheats, llm budget
 oracle_bot/  emu.py record.py ram.py cheats.py nav.py act.py menus.py runner.py viewer.py cli.py llm.py
-             data/ages.json   # generated symbols/struct offsets/tile tables (committed)
+             data/ages.json   # generated symbols/struct offsets/tile tables (generated locally, not committed)
 route/       __init__.py (segment order), places.py (named rooms/doors), s00_intro.py … s07_crescent.py
 tools/       gen_symbols.py (vendor/oracles-disasm → data/ages.json), probe.py (determinism/speed)
 tests/       pure tests: A*, BCD, log round-trip, .sav checksum

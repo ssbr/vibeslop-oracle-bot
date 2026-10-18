@@ -5,3 +5,13 @@
 __pycache__/
 *.pyc
 *.ram
+
+# Derived from the game or the (unlicensed) disassembly: generated locally, never distributed.
+/oracle_bot/data/ages.json
+/oracle_bot/data/ages_text.json
+/checkpoints/**/*.sav
+/checkpoints/**/*.pyboy
+/checkpoints/**/*.png
+/checkpoints/*/replay.log
+# Not yet.
+/README.md

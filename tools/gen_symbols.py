@@ -1,4 +1,7 @@
-"""Generate oracle_bot/data/ages.json from the oracles-disasm sources in vendor/oracles-disasm.
+"""Generate oracle_bot/data/ages.json (and ages_text.json) from the oracles-disasm sources in vendor/oracles-disasm.
+
+These files are derived from the disassembly and the game, so they aren't distributed: generate them locally from
+a clone of https://github.com/Stewmath/oracles-disasm at commit 21c924afdc8a13225e849214479d5113da2ec226.
 
 RAM label addresses are computed by laying out the RAMSECTIONs/ENUMs/STRUCTs like the assembler does (with
 ROM_AGES defined), then cross-checked against the hand-written `; $xxxx` address comments in wram.s.

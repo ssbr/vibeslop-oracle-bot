@@ -3,6 +3,8 @@ name = "oracle-bot"
 version = "0.1.0"
 description = "Scripted bot for Zelda: Oracle of Ages with deterministic replays and portable checkpoints"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "pyboy==2.8.1",
     "numpy",
