@@ -181,6 +181,18 @@ def raft_to_crescent(e):
 
 TOKAY = ram.CONST["INTERAC_TOKAY"]
 SPROUT = ram.CONST["ENEMY_VINE_SPROUT"]
+SHOP_ITEM = ram.CONST["INTERAC_TOKAY_SHOP_ITEM"]
+SHOP_FEATHER, SHOP_BRACELET = 0, 1  # (shop item subids: Link swaps the shovel, feather and bracelet here)
+
+
+def shop(e, item: int, times: int = 1) -> None:
+    """In the Tokay trading hut (1:ad): pick the item, answering yes. With the feather or bracelet in hand,
+    picking the other one first gives the shovel back; picking it again swaps the shovel for it."""
+    act.travel_to(e, 0xAD)
+    act.enter(e, (1, 5), "up")
+    for _ in range(times):
+        act.talk(e, SHOP_ITEM, item, choices=[0], sides="d", quiet=30)
+    act.exit_room(e, "down")
 
 
 @R.step(done=lambda e: ram.has(e, "SHOVEL"), note="1:cb: the Tokay south of the landing has the shovel")
@@ -198,6 +210,153 @@ def crescent_sword(e):
     act.push_tile(e, (2, 10), "left")
     act.talk(e, TOKAY, 0x06, sides="rd", quiet=30)
     act.exit_room(e, "down")
+
+
+@R.step(done=lambda e: ram.has(e, "BOMBS"),
+        note="the hut swaps the shovel for the bracelet; the bombs are in the Cucco hut's walled-off back room "
+        "(2:e3): round by 1:dd to 1:cd's west column, its stairs to cave 2:ce, push two mounds right, the far "
+        "stairs; back out the same way, bombing 2:ce's cracked blocks (the mounds reset)")
+def crescent_bombs(e):
+    shop(e, SHOP_BRACELET)
+    act.travel_to(e, 0xCD, at=(104, 24))
+    act.enter(e, (1, 1), "up")
+    act.push_tile(e, (6, 5), "right")
+    act.push_tile(e, (5, 6), "right")
+    act.enter(e, (1, 8), "up")
+    act.collect(e, act.find(e, "interaction", MISC_1, 0x0A), "r", lambda e: ram.has(e, "BOMBS"))
+    act.enter(e, (1, 6), "up")
+    act.break_tile(e, (4, 5))
+    act.break_tile(e, (4, 4))
+    act.enter(e, (1, 1), "up")
+
+
+@R.step(done=lambda e: ram.has(e, "FLIPPERS"),
+        note="swap the bracelet back for the feather; bomb open 1:cb's cave (0,8): hop the water and bomb the "
+        "cracked blocks to the Tokay with the flippers")
+def crescent_flippers(e):
+    shop(e, SHOP_FEATHER, times=2)
+    act.travel_to(e, 0xCB, at=(40, 136))
+    act.break_tile(e, (0, 8))
+    act.enter(e, (0, 8), "up")
+    act.talk(e, TOKAY, 0x09, sides="lrdu", quiet=30, allow=act.abilities(e) | {"bombs"})
+    act.exit_room(e, "down")
+
+
+# 7:05, the side-view water under 5:cc: down the west shaft, along the bottom, up the east pocket to its ladder.
+UNDER_5CC = [(8, 24), (72, 24), (72, 72), (104, 72), (104, 24), (152, 24), (152, 200), (104, 200), (88, 184)]
+
+
+@R.step(done=lambda e: ram.has(e, "SEED_SATCHEL"),
+        note="swap back to the bracelet; in 5:cc lift the north-west rocks and dive (B) in the pool there; "
+        "through 7:05 (swim, ladders) up into the north-east pocket, stairs to the central plateau (1:bc): "
+        "the Tokay west in 1:bb has the satchel")
+def crescent_satchel(e):
+    shop(e, SHOP_BRACELET, times=2)
+    act.travel_to(e, 0xCB, at=(40, 136))
+    act.enter(e, (0, 8), "up")
+    act.walk_to(e, (24, 40), tol=3)
+    act.wait_until(e, lambda e: ram.u8(e, "wLinkSwimmingState") == 3, 60, "swimming")
+    act.tap(e, "b", hold=2, after=4)  # dive
+    act.wait_until(e, lambda e: ram.room(e)[0] == 7, 120, "dive")
+    act.settle(e, quiet=30)
+    act.steer_through(e, *UNDER_5CC, tol=4)
+    act.hold_until(e, "up", lambda e: ram.link_px(e)[0] <= 57 and ram.u8(e, "wLinkSwimmingState") == 0, 120,
+                   "up out of the pocket")
+    act.hold_until(e, "left", lambda e: ram.link_px(e)[1] <= 106 and ram.u8(e, "wLinkInAir") == 0, 300,
+                   "to the middle ladder")
+    act.climb(e, 105, "up", lambda e: ram.link_px(e)[0] <= 26)
+    act.hold_until(e, "right", lambda e: ram.link_px(e)[1] >= 215, 300, "to the exit ladder")
+    act.climb(e, 216, "up", lambda e: ram.room(e)[0] != 7)
+    act.settle(e, quiet=30)
+    act.enter(e, (1, 12), "left")
+    act.travel_to(e, 0xBB, at=(72, 104))
+    act.talk(e, TOKAY, 0x0A, quiet=30)
+
+
+@R.step(done=lambda e: ram.gflag(e, "BOUGHT_FEATHER_FROM_TOKAY"),
+        note="off the plateau by jumping down 1:bc's south-west cliff into 1:cc; the hut sells the feather for "
+        "10 mystery seeds")
+def crescent_feather(e):
+    act.exit_room(e, "right")
+    act.walk_to(e, (100, 24), tol=2)
+    act.hold_until(e, "down", lambda e: ram.room(e) != (1, 0xBC) and ram.controllable(e), 180, "off the cliff")
+    act.settle(e, quiet=20)
+    shop(e, SHOP_FEATHER)
+
+
+def block_7_06(e) -> ram.Obj:
+    return act.find(e, "interaction", ram.CONST["INTERAC_MOVING_SIDESCROLL_PLATFORM"], 0x0B)
+
+
+def on_block(e) -> bool:
+    b, (y, x) = block_7_06(e), ram.link_px(e)
+    return ram.u8(e, "wLinkInAir") == 0 and ram.u8(e, "wLinkSwimmingState") == 0 and abs(x - b.x) <= 15 and y < b.y - 20
+
+
+def jump_off_block(e) -> None:
+    """From the sliding block: run to its east edge and jump for the first ledge (5,10)."""
+    act.hold_until(e, "right", lambda e: ram.link_px(e)[1] >= block_7_06(e).x + 10, 40, "the block's edge")
+    act.jump(e, "right")
+
+
+def on_first_ledge(e) -> bool:
+    y, x = ram.link_px(e)
+    return ram.u8(e, "wLinkInAir") == 0 and ram.u8(e, "wLinkSwimmingState") == 0 and y <= 74 and 158 <= x <= 178
+
+
+def step_off_ladder(e) -> None:
+    e.set_buttons(act.mask_of("right"))
+    e.step(40)
+    e.set_buttons(0)
+
+
+@R.step(done=lambda e: ram.has(e, "HARP"),
+        note="the plateau with the harp Tokay (1:da west) is reached through cave 5:cd from 1:db: lift a pot, "
+        "stairs down to side view 7:07, swim west into 7:06, up its ladder, onto the sliding block, feather "
+        "up the ledges and back east along 7:07's top to its west ladder, up to 5:cd's west half, out; back by the "
+        "one-way way 7:07 does go")
+def crescent_harp(e):
+    act.travel_to(e, 0xDB)
+    act.fight(e)  # (Octoroks knock Link off the top edge)
+    act.enter(e, (0, 1), "up")
+    act.enter(e, (4, 9), "up")
+    act.hold(e, "down", 90)  # down the ladder
+    act.hold_until(e, "left", lambda e: ram.u8(e, "wLinkSwimmingState") != 0, 120, "into the water")
+    act.steer_through(e, (120, 40), (120, 8), tol=3)
+    act.hold_until(e, "left", lambda e: ram.room(e) == (7, 6), 120, "west into 7:06")
+    act.settle(e, quiet=10)
+    act.steer_through(e, (146, 200), (146, 24), (104, 24), tol=3)  # under the block, to the ladder
+    act.hold_until(e, "up", lambda e: abs(ram.link_px(e)[0] - 60) <= 2, 120, "up the ladder")
+    if not act.lookahead(e, step_off_ladder, on_block, 60, lambda e: True, max_frames=200):
+        raise act.Stuck("couldn't step onto the sliding block")
+    act.ready(e, "FEATHER")  # (equipping it mid run-up costs the jump its momentum)
+    act.wait_until(e, lambda e: block_7_06(e).x >= 110, 400, "the block near its east end")
+    if not act.lookahead(e, jump_off_block, on_first_ledge, 90, lambda e: block_7_06(e).x >= 110, max_frames=200):
+        raise act.Stuck("couldn't jump from the block to the ledge")
+    for _ in range(2):  # two more ledges up
+        act.jump(e, "right")
+    act.hold_until(e, "right", lambda e: ram.room(e) == (7, 7) and ram.controllable(e), 120, "east into 7:07")
+    act.settle(e, quiet=5)
+    act.hold_until(e, "right", lambda e: ram.link_px(e)[1] >= 40, 60, "the gap")
+    act.jump(e, "right")
+    act.hold_until(e, "right" if ram.link_px(e)[1] < 88 else "left", lambda e: abs(ram.link_px(e)[1] - 88) <= 1, 60,
+                   "the ladder")
+    act.climb(e, 88, "up", lambda e: ram.room(e)[0] != 7)
+    act.settle(e, quiet=20)
+    act.exit_room(e, "down", span=(48, 64))
+    act.talk(e, TOKAY, 0x08, quiet=30)
+    # Back the way 7:07 does go: its west ladder, down the gap into the water, east, up both ladders.
+    act.enter(e, (0, 6), "up")
+    act.enter(e, (4, 2), "up")
+    act.hold_until(e, "down", lambda e: ram.u8(e, "wLinkInAir") == 0 and ram.link_px(e)[0] >= 40, 120, "down the ladder")
+    act.hold_until(e, "left", lambda e: ram.u8(e, "wLinkSwimmingState") != 0, 200, "down the gap into the water")
+    act.steer_through(e, (120, 56), (120, 168), (104, 168), tol=3)
+    act.hold_until(e, "up", lambda e: ram.u8(e, "wLinkSwimmingState") == 0 and ram.u8(e, "wLinkInAir") == 0
+                   and ram.link_px(e)[0] <= 74, 200, "up the east ladder")
+    act.hold_until(e, "right", lambda e: ram.link_px(e)[1] >= 215, 200, "to the exit ladder")
+    act.climb(e, 216, "up", lambda e: ram.room(e)[0] != 7)
+    act.settle(e, quiet=20)
+    act.exit_room(e, "down", span=(120, 144))
 
 
 # Vine sprouts (enemy subids) that must stand where the present's vines up to the Scent Tree grow:

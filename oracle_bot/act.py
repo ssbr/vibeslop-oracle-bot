@@ -204,24 +204,21 @@ def moosh_float(e: Emu, *waypoints: tuple[int, int], max_frames: int = 300) -> N
     settle(e)
 
 
-def steer_through(e: Emu, *waypoints: tuple[int, int], tol: int = 3, max_frames: int = 900) -> None:
-    """Steer Link through pixel `waypoints` with no path planning, re-aiming every frame: for movement with
-    drift the planner doesn't model (sidescrolling water)."""
-    points = list(waypoints)
+def steer_through(e: Emu, *waypoints: tuple[int, int], tol: int = 3, max_frames: int = 400) -> None:
+    """Steer Link through pixel `waypoints` with no path planning, re-aiming every frame (at most `max_frames`
+    per leg): for movement with drift the planner doesn't model (sidescrolling water)."""
     try:
-        for _ in range(max_frames):
-            y, x = ram.link_px(e)
-            ty, tx = points[0]
-            if abs(ty - y) <= tol and abs(tx - x) <= tol:
-                points.pop(0)
-                if not points:
-                    return
-                continue
-            e.set_buttons(_mask(steer(ty - y if abs(ty - y) > tol else 0, tx - x if abs(tx - x) > tol else 0)))
-            e.step()
+        for ty, tx in waypoints:
+            for _ in range(max_frames):
+                y, x = ram.link_px(e)
+                if abs(ty - y) <= tol and abs(tx - x) <= tol:
+                    break
+                e.set_buttons(_mask(steer(ty - y if abs(ty - y) > tol else 0, tx - x if abs(tx - x) > tol else 0)))
+                e.step()
+            else:
+                raise Stuck(f"steer_through: didn't reach {(ty, tx)} (at {ram.link_px(e)})")
     finally:
         e.set_buttons(0)
-    raise Stuck(f"steer_through: didn't reach {points[0]} (at {ram.link_px(e)})")
 
 
 def play_harp(e: Emu) -> None:
@@ -303,7 +300,7 @@ def strike_at(e: Emu, tile: tuple[int, int], strike: Callable[[Emu, str], None],
     are preferred; `wait` runs after each strike (e.g. for an ember to burn out) before checking the tile."""
     r, c = tile
     g = nav.grid(e)
-    ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
+    ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e), arrival_warp(e)).ok
     y0, x0 = ram.link_px(e)
     spots = []
     for d, (oy, ox) in offsets.items():
@@ -493,14 +490,18 @@ def walk_to(e: Emu, goal, allow: frozenset[str] | None = None, tol: int = 1, max
         e.set_buttons(0)
 
 
+def arrival_warp(e: Emu) -> frozenset[tuple[int, int]]:
+    """The warp Link arrived on stays inactive until he steps off it (wEnteredWarpPosition); any other warp
+    tile would whisk him away, so only that one may be stood on or crossed."""
+    entered = ram.u8(e, "wEnteredWarpPosition")
+    return frozenset({(entered >> 4, entered & 15)} if entered != 0xFF else ())
+
+
 def route_plan(e: Emu, g, pos, goal, allow: frozenset[str], avoid, exits: frozenset[str]) -> list[tuple[int, int]]:
     """Prefer a path that breaks nothing; NPCs move (and some follow Link), so if they wall him in, plan
     without them."""
 
-    # The warp Link arrived on stays inactive until he steps off it (wEnteredWarpPosition); any other warp
-    # tile would whisk him away, so only that one may be crossed.
-    entered = ram.u8(e, "wEnteredWarpPosition")
-    under = frozenset({(entered >> 4, entered & 15)} if entered != 0xFF else ())
+    under = arrival_warp(e)
     for a in (allow - BREAKERS, allow):
         for blockers in (nav.blockers(e), ()):
             plan = nav.path(g, pos, goal, a, avoid, blockers, exits, under)
@@ -611,6 +612,9 @@ def enter(e: Emu, tile: tuple[int, int], direction: str = "up", max_frames: int 
                 e.set_buttons(0)
         break
     settle(e)
+    (g0, r0), (g1, r1) = before, ram.room(e)
+    if g1 == g0 and abs(r1 - r0) in (1, 16):  # a screen edge, not the warp (knocked off course)
+        raise Stuck(f"enter {tile}: left {g0}:{r0:02x} by its edge into {g1}:{r1:02x}")
 
 
 def find(e: Emu, kind: str, obj_id: int, subid: int | None = None) -> ram.Obj:
@@ -657,9 +661,9 @@ def approach(e: Emu, obj: ram.Obj, sides: str = "durl", allow: frozenset[str] | 
 
 
 def talk(e: Emu, obj_id: int, subid: int | None = None, choices: Sequence[int] = (), sides: str = "durl",
-         quiet: int = 1) -> None:
+         quiet: int = 1, allow: frozenset[str] | None = None) -> None:
     """Talk to an interaction (NPC) and advance its text, answering prompts with `choices`."""
-    approach(e, find(e, "interaction", obj_id, subid), sides)
+    approach(e, find(e, "interaction", obj_id, subid), sides, allow)
     tap(e, "a", hold=1, after=4)
     wait_until(e, lambda e: not ram.controllable(e), 30, "NPC to respond")
     settle(e, choices, quiet=quiet)
@@ -1197,7 +1201,7 @@ def lift_at(e: Emu, tile: tuple[int, int], allow: frozenset[str] | None = None) 
     r, c = tile
     before = ram.u8(e, "wRoomLayout", r * 16 + c)
     g = nav.grid(e)
-    ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e)).ok
+    ok = nav.clearance(g, frozenset(allow or ()) - BREAKERS, nav.blockers(e), arrival_warp(e)).ok
     y0, x0 = ram.link_px(e)
     spots = []
     for d in ("up", "down", "left", "right"):  # in contact with the tile, facing it
