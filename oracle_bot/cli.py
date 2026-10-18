@@ -107,13 +107,18 @@ def cmd_video(args) -> int:
     run_dir = ROOT / "runs" / args.run
     log = Log.load(run_dir / "replay.log")
     if args.step:
-        start, end = video.step_range(run_dir, args.step)
+        start, end = video.step_range(run_dir, *args.step.split(":"))
     else:
-        start, end = args.start, args.end
-    end = min(end, start + int(args.max_seconds * video.FPS))  # keep clips watchable
-    out = Path(args.out) if args.out else run_dir / "clips" / f"{args.step or start}_{start}-{end}"
-    path = video.render(log, start, end, out, base=video.nearest_state(run_dir, start))
-    print(f"{path}  (frames {start}-{end}, {(end - start) / video.FPS:.0f} s)")
+        start, end = args.start, args.end or log.ops[-1].frame
+    if args.max_seconds:
+        end = min(end, start + int(args.max_seconds * video.FPS * args.speed))  # keep clips watchable
+    caption, chapters = video.step_captions(run_dir) if args.caption else (None, [])
+    name = (args.step or str(start)).replace(":", "-")
+    out = Path(args.out) if args.out else run_dir / "clips" / f"{name}_{start}-{end}_x{args.speed}"
+    path = video.render(log, start, end, out, base=video.nearest_state(run_dir, start), speed=args.speed,
+                        scale=args.scale, caption=caption, chapters=chapters)
+    print(f"{path}  (frames {start}-{end}: {(end - start) / video.FPS / 60:.1f} min of play, "
+          f"{(end - start) / video.FPS / args.speed / 60:.1f} min of video)")
     return 0
 
 
@@ -137,10 +142,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", default="main")
     p = sub.add_parser("video", help="render a stretch of a run's replay to MP4 (GIF without ffmpeg)")
     p.add_argument("--run", default="main")
-    p.add_argument("--step", help="a route step (or mark) name: the frames it took")
+    p.add_argument("--step", help="a route step (or mark) name, or FIRST:LAST: the frames they took")
     p.add_argument("--from", dest="start", type=int, default=0, help="first frame")
-    p.add_argument("--to", dest="end", type=int, default=0, help="end frame")
-    p.add_argument("--max-seconds", type=float, default=300, help="cut clips longer than this")
+    p.add_argument("--to", dest="end", type=int, default=0, help="end frame (default: the end of the log)")
+    p.add_argument("--speed", type=int, default=1, help="playback speed multiplier")
+    p.add_argument("--scale", type=int, default=3, help="pixel scale")
+    p.add_argument("--caption", action="store_true", help="game time and route step under the screen, and "
+                   "chapters per step")
+    p.add_argument("--max-seconds", type=float, default=300, help="cut videos longer than this (0: no limit)")
     p.add_argument("-o", "--out", help="output path (default runs/<run>/clips/...)")
     args = ap.parse_args(argv)
     return {"steps": cmd_steps, "run": cmd_run, "inspect": cmd_inspect, "verify": cmd_verify,
